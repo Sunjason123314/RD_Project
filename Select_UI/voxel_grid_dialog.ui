@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>VoxelGridDialog</class>
+ <widget class="QDialog" name="VoxelGridDialog">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>380</width><height>160</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>Voxel Grid Downsample</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="labelLeaf">
+     <property name="text"><string>Leaf size (X = Y = Z):</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDoubleSpinBox" name="spinLeaf">
+     <property name="minimum"><double>0.0001</double></property>
+     <property name="maximum"><double>1000.00</double></property>
+     <property name="value"><double>1.00</double></property>
+     <property name="singleStep"><double>0.10</double></property>
+     <property name="decimals"><number>4</number></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="hintLeaf">
+     <property name="text"><string>Larger -> fewer voxels, fewer output points, faster processing. Smaller -> preserves more detail, more output points.</string></property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons"><set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>

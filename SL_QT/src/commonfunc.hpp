@@ -1,0 +1,507 @@
+#pragma once
+/*???????*/
+//std
+#include <iostream>
+#include <math.h>
+#include <corecrt_math_defines.h>
+#include <vector>
+#include <fstream>
+#include <map>
+#include <corecrt_io.h>
+
+//opencv
+#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/core/cuda.hpp>//gpu
+
+//boost
+#include <boost/algorithm/string.hpp>
+
+//eigen
+#include <Eigen/Dense>
+
+//json
+#include "json/json.h"//readJsonParameters
+
+//pcl
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/io/pcd_io.h>
+
+#ifdef SL_ENABLE_MATLAB
+#include <mat.h>
+#include <matrix.h>
+#endif
+
+//mine
+#ifdef USECUDA
+#include "cudaimage.h"
+#endif
+
+using namespace std;
+
+/**************??????*******************/
+
+/// @brief ???json???????
+/// @param filename 
+/// @param root 
+void readJsonParameters(const std::string& filename,Json::Value& root)
+{
+	root.clear();
+    // ??? JSON ???
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cout << "Failed to open JSON file." << std::endl;
+    }
+    // ???? JSON ????
+    Json::CharReaderBuilder readerBuilder;
+    std::string errMsg;
+    if (!Json::parseFromStream(readerBuilder, file, &root, &errMsg))
+    {
+        std::cout << "Failed to parse JSON: " << errMsg << std::endl;
+    }
+}
+
+/// @brief ?????????????????????
+/// @param path ???????
+/// @param files ?????
+void getFiles(string path, vector<string>& files)
+{
+	//??????
+	intptr_t hFile = 0;//win7?long
+	//??????
+	struct _finddata_t fileinfo;
+	string p;
+
+	if ((hFile = _findfirst(p.assign(path).append("\\*").c_str(), &fileinfo)) != -1)
+	{
+		do
+		{
+			//???????,?????
+			//???????,????????
+			if ((fileinfo.attrib & _A_SUBDIR))
+			{
+				if (strcmp(fileinfo.name, ".") != 0 && strcmp(fileinfo.name, "..") != 0)
+					getFiles(p.assign(path).append("\\").append(fileinfo.name), files);
+			}
+			else
+			{
+				files.push_back(p.assign(path).append("\\").append(fileinfo.name));
+			}
+		} while (_findnext(hFile, &fileinfo) == 0);
+		_findclose(hFile);
+	}
+}
+
+/// @brief ??????????????????????
+/// @param path ???????
+/// @param imgs ???????
+/// @param Gauss ????????????
+/// @return 
+bool read_imgs(string path, vector<cv::Mat>& imgs,bool Gauss=false,double sigma=1.0)
+{
+	vector<string> files;
+	getFiles(path, files);
+	imgs.resize(files.size());
+	for (size_t i = 0; i < files.size(); i++)
+	{
+		// cout << files[i] << endl;//?????????
+		imgs[i]=cv::imread(files[i], CV_8U);//????????????????
+		if(Gauss)
+		{
+			cv::GaussianBlur(imgs[i], imgs[i], cv::Size(9,9), sigma, sigma);
+			// cv::medianBlur(imgs[i], imgs[i], 5);
+		}
+	}
+	return true;
+}
+
+/// @brief ???????
+/// @param src ?????
+/// @param dst ?????????
+/// @param width ???????????????????
+void cut_pic(const cv::Mat& src,cv::Mat& dst,int width)
+{
+	cv::Rect region(width, width, src.rows-2*width, src.cols-2*width);
+	dst=src(region).clone();
+	// dst=src;
+}
+
+/// @brief ??????????????????????
+/// @param path ???????
+/// @param imgs_L ??????????
+/// @param imgs_R ??????????
+/// @param rows ????????????????
+/// @param cols ????????????????
+/// @param skip ?????????????0????????????????????????
+/// @param Gauss ?????????
+/// @param sigma  ????????????????????
+void read_imgs(string path, vector<cv::Mat>& imgs_L,vector<cv::Mat>& imgs_R,int rows,int cols,int cut_width,int skip=0,bool Gauss=false,double sigma=1.0)
+{
+	read_imgs(path+"/L",imgs_L,Gauss,sigma);
+	read_imgs(path+"/R",imgs_R,Gauss,sigma);
+	if(skip!=0)
+	{
+		imgs_L.erase(imgs_L.begin(),imgs_L.begin()+skip);
+		imgs_R.erase(imgs_R.begin(),imgs_R.begin()+skip);
+	}
+
+	if(imgs_L.size()!=imgs_R.size())
+	{
+		cout<<"?????????????????"<<endl;
+		return;
+	}
+	
+	if(imgs_L[0].rows>rows||imgs_L[0].cols>cols)//???????
+	{
+		cout<<"??????????????????"<<endl;
+		vector<cv::Mat> patternsL_cut,patternsR_cut;
+		for (int i = 0; i < imgs_L.size(); i++)
+		{
+			cv::Mat tempL,tempR;
+			cut_pic(imgs_L[i],tempL,cut_width);
+			cut_pic(imgs_R[i],tempR,cut_width);
+			imgs_L[i]=tempL.clone();
+			imgs_R[i]=tempR.clone();
+		}
+	}
+	if(imgs_L[0].rows<rows||imgs_L[0].cols<cols)
+	{
+		cout<<"???????????????????"<<endl;
+		return;
+	}
+}
+
+/// <summary>
+/// ???????
+/// </summary>
+/// <param name="Emat">eigen????</param>
+/// <param name="cvtype"></param>
+/// <returns>opencv????</returns>
+cv::Mat EigenToCV(const Eigen::MatrixXd& Emat, int cvtype)
+{
+	cv::Mat CVmat(Emat.rows(), Emat.cols(), cvtype);
+	for (int i = 0; i < Emat.rows(); i++)
+	{
+		for (int j = 0; j < Emat.cols(); j++)
+		{
+			CVmat.at<uchar>(i, j) = Emat(i, j);
+		}
+	}
+	return CVmat;
+}
+
+/// <summary>
+/// ???????
+/// </summary>
+/// <param name="CVmat">opencv????</param>
+/// <returns>eigen????</returns>
+Eigen::MatrixXd CVToEigen(const cv::Mat& CVmat)
+{
+	Eigen::MatrixXd Emat(CVmat.rows, CVmat.cols);
+	for (int i = 0; i < Emat.rows(); i++)
+	{
+		for (int j = 0; j < Emat.cols(); j++)
+		{
+			Emat(i, j) = CVmat.at<uchar>(i, j);
+		}
+	}
+	return Emat;
+}
+
+
+/// @brief ?????????????
+/// @tparam T ??????????
+/// @param pic ??
+/// @param cloud ????
+template<typename T>
+void cvMat_PCL(cv::Mat& pic,pcl::PointCloud<pcl::PointXYZ>& cloud)
+{
+	cloud.clear();
+	for (int i = 0; i < pic.rows; i++)
+	{
+		for (int j = 0; j < pic.cols; j++)
+		{
+			pcl::PointXYZ p;
+			p.x=i;
+			p.y=j;
+			p.z=pic.at<T>(i,j);
+			cloud.push_back(p);
+		}
+	}
+}
+
+/**************??????*******************/
+
+/// @brief ???????
+/// @param cloud ???????
+void showcloud(pcl::PointCloud<pcl::PointXYZ>& cloud,std::string name="PointCloud Viewer")
+{
+	pcl::visualization::PCLVisualizer viewer(name);
+	pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointXYZ> fildColor(cloud.makeShared(), "z");
+	viewer.addCoordinateSystem(10.0, "reference");
+	viewer.addPointCloud<pcl::PointXYZ>(cloud.makeShared(),fildColor,"cloud");
+    while (!viewer.wasStopped())
+    {
+        viewer.spinOnce();
+    }
+}
+
+/// @brief ???cuda????
+/// @tparam T ???????
+/// @param image ???????cuda???
+template<typename T>
+void showcudaimage(CudaImage<T>& image,std::string name="PointCloud Viewer")
+{
+	pcl::PointCloud<pcl::PointXYZ> cloud;//??????????????????
+	image.OutPutPointCloud(cloud);
+	showcloud(cloud,name);
+}
+
+/**************matlab???*******************/
+
+#ifdef SL_ENABLE_MATLAB
+MATFile* LoadMLMat(const string &MLMat_file)
+{
+    MATFile *pmatFile = matOpen(MLMat_file.c_str(),"r");
+    if (pmatFile == NULL)
+    {
+        std::cerr << "[calibration]:??????????" << MLMat_file << std::endl;
+        return NULL;
+    }
+	return pmatFile;
+}
+
+/// @brief matlab??????Eigen????(double????)
+/// @param labmat
+/// @param cvmat
+void MLMatToEigenMat(mxArray* labmat,Eigen::MatrixXd& egmat)
+{
+	mxClassID classId = mxGetClassID(labmat);
+	if(classId!=mxDOUBLE_CLASS)
+	{
+		const char* className = mxGetClassName(labmat);
+		cout<<"???????????:"<<*className<<endl;
+	}
+
+    int N=mxGetN(labmat);
+    int M=mxGetM(labmat);
+    double* labmatdata=(double*)mxGetData(labmat);
+
+	egmat.resize(M,N);
+    for (int i = 0; i < M; i++)
+    {
+        for (int j = 0; j < N; j++)
+        {
+            egmat(i,j)=labmatdata[i+j*M];
+        }
+    }
+	Eigen::MatrixXd aa;
+	aa.data();
+}
+#endif
+
+
+/**************????????*******************/
+
+/// @brief ?????????????
+/// @param image 
+void centerlize(cv::Mat& image)
+{
+	image = image(cv::Rect(0, 0, image.cols & -2, image.rows & -2));
+	// ????????????????????????????????????????
+	int cx = image.cols / 2;
+	int cy = image.rows / 2;
+	cv::Mat q0(image, cv::Rect(0, 0, cx, cy));   // ????????
+	cv::Mat q1(image, cv::Rect(cx, 0, cx, cy));  // ????????
+	cv::Mat q2(image, cv::Rect(0, cy, cx, cy));  // ????????
+	cv::Mat q3(image, cv::Rect(cx, cy, cx, cy)); // ????????
+
+	  //?????????????
+	cv::Mat tmp;
+	q0.copyTo(tmp); q3.copyTo(q0); tmp.copyTo(q3);//?????????????????
+	q1.copyTo(tmp); q2.copyTo(q1); tmp.copyTo(q2);//?????????????????
+}
+
+/// @brief ????????????????????????
+/// @param input_image ???????
+/// @param output_image ?????????????????????
+/// @param transform_image ????????????????
+void My_DFT(cv::Mat input_image, cv::Mat& output_image, cv::Mat& transform_image)
+{
+	//1.??????????2??3??5??????????????
+	int m = cv::getOptimalDFTSize(input_image.rows);
+	int n = cv::getOptimalDFTSize(input_image.cols);
+	cv::copyMakeBorder(input_image, input_image, 0, m - input_image.rows, 0, n - input_image.cols, cv::BORDER_CONSTANT, cv::Scalar::all(0));
+
+	//2.???????????????planes???????????????????????
+	cv::Mat planes[] = { cv::Mat_<float>(input_image), cv::Mat::zeros(input_image.size(), CV_32F) };
+
+	//3.???????????????????????????????:transform_image??????Merge?????????????????????????????????????????????????????????????
+	// cv::merge(planes, 2, transform_image);
+
+	//4.????????????
+	cv::Mat input_image_;
+	input_image.convertTo(input_image_,CV_32F);
+	cv::dft(input_image_, transform_image,cv::DFT_COMPLEX_OUTPUT);
+
+	//5.??????????????????output_image????????
+	cv::split(transform_image, planes); // ????????????????????????????????????????
+	cv::magnitude(planes[0], planes[1], output_image); //??????????????????output_image????????
+
+	//6.?????????????????????????????????
+	// output_image += cv::Scalar(1);   // ?????????????????????1?????log0
+	// log(output_image, output_image);   // ?????
+	normalize(output_image, output_image, 0, 255, cv::NORM_MINMAX); //?????
+
+	//7.???????????????????
+	// output_image = output_image(cv::Rect(0, 0, output_image.cols & -2, output_image.rows & -2));
+
+	centerlize(output_image);//?????????????
+}
+
+inline double B_(int i,int j)
+{
+	double theta=0.5*M_PI;
+	double a=120,b=40;
+	double d0=50;
+	int n=2;
+	int center=2560;
+	int f=73;
+
+	double d1=sqrt(pow((i-center)*cos(theta)+(j+f-center)*sin(theta),2)+pow(a/b,2)*pow((i-center)*sin(theta)-(j+f-center)*cos(theta),2));
+	double value1=1/(1+pow(d0/d1,2*n));
+
+	double d2=sqrt(pow((i-center)*cos(theta)+(j-f-center)*sin(theta),2)+pow(a/b,2)*pow((i-center)*sin(theta)-(j-f-center)*cos(theta),2));
+	double value2=1/(1+pow(d0/d2,2*n));
+
+	return value1*value2;
+}
+
+void FT_filter(cv::Mat& image)
+{
+	cv::Mat planes[] = { cv::Mat_<float>(image), cv::Mat::zeros(image.size(), CV_32F) };
+	cv::split(image, planes); // ????????????????????????????????????????
+	cv::Mat real=planes[0],imaginary=planes[1];
+	centerlize(real);
+	centerlize(imaginary);
+	
+	int range=50;
+	// double theta=0;
+	// double a=120,b=40;
+	// double d0=50;
+	// int n=3;
+	// int center=real.cols/2;
+	for (int i = 0; i < image.cols; i++)
+	{
+		for (int j = 0; j < image.rows; j++)
+		{
+			// double d1=sqrt(pow((i-70-center)*cos(theta)+(j-center)*sin(theta),2)+pow(a/b,2)*pow((i-70-center)*sin(theta)-(j-center)*cos(theta),2));
+			// double value1=1/(1+pow(d0/d1,2*n));
+
+			// double d2=sqrt(pow((i+70+center)*cos(theta)+(j-center)*sin(theta),2)+pow(a/b,2)*pow((i+70-center)*sin(theta)-(j-center)*cos(theta),2));
+			// double value2=1/(1+pow(d0/d2,2*n));
+
+			// double value=value1*value2;
+			double value=B_(i,j);
+			real.at<float>(i,j)=value*real.at<float>(i,j);
+			imaginary.at<float>(i,j)=value*imaginary.at<float>(i,j);
+		}
+	}
+
+	cv::Mat showimage;
+	cv::magnitude(real, imaginary, showimage);
+	cv::normalize(showimage,showimage,0,255,cv::NORM_MINMAX);
+	// centerlize(showimage);
+
+	cv::Size newSize(1000, 1000);  // ?????
+    cv::Mat resizedImage;
+    cv::resize(showimage, resizedImage, newSize);
+	cv::imshow("?????",resizedImage);
+	cv::waitKey(0);
+
+	// centerlize(real);
+	// centerlize(imaginary);
+	cv::merge(planes, 2, image);
+}
+
+/// @brief ???????????????????
+/// @param transform_image ????????????????
+/// @param output_image ??????????
+void My_IDFT(cv::Mat transform_image, cv::Mat& output_image)
+{
+	// int range=10;
+	// for (int i = range; i < transform_image.cols-range; i++)
+	// {
+	// 	for (int j = range; j < transform_image.rows-range; j++)
+	// 	{
+	// 		transform_image.at<cv::Vec2f>(i,j).val[0]=0;
+	// 		// cout<<image.at<cv::Vec2f>(i,j).val[0]<<" ";
+	// 		// if(image.at<cv::Vec2f>(i,j).val[0]>100)
+	// 		// {
+	// 			// image.at<cv::Vec2f>(i,j).val[0]=0;
+	// 		// }
+	// 	}
+	// }
+	
+	cv::dft(transform_image, transform_image,cv::DFT_REAL_OUTPUT+cv::DFT_INVERSE+cv::DFT_SCALE);
+	transform_image.convertTo(output_image,CV_8U);
+}
+
+/// @brief ???????????????
+/// @param cloud ???????
+/// @param min ???????
+/// @param max ??????
+/// @return ???????
+pcl::PointCloud<pcl::PointXYZ> PCL_depth_filter(pcl::PointCloud<pcl::PointXYZ>& cloud,double min, double max)
+{
+	pcl::PointCloud<pcl::PointXYZ> result;
+	for (auto point:cloud)
+	{
+		if((point.z>min)&(point.z<max))
+		{
+			result.push_back(point);
+		}
+	}
+	return result;
+}
+
+
+///????????????-???
+void generate_gaussian_kernel2_public(double* kernel, int kernel_size, double sigma) {
+        // ????????????????
+    if (kernel == nullptr) {
+        throw std::invalid_argument("Kernel pointer cannot be null");
+    }
+    
+    if (kernel_size <= 0 || kernel_size % 2 == 0) {
+        throw std::invalid_argument("Kernel size must be a positive odd number");
+    }
+    
+    if (sigma <= 0) {
+        throw std::invalid_argument("Sigma must be positive");
+    }
+    
+    const int radius = kernel_size / 2;
+    double sum = 0.0;
+    const double two_sigma_sq = 2.0 * sigma * sigma;
+    const double pi = 3.14159265358979323846;
+    const double scale = 1.0 / (pi * two_sigma_sq);
+    
+    // ?????????
+    for (int y = -radius; y <= radius; y++) {
+        for (int x = -radius; x <= radius; x++) {
+            double distance_sq = x * x + y * y;
+            double value = scale * exp(-distance_sq / two_sigma_sq);
+            
+            int index = (y + radius) * kernel_size + (x + radius);
+            kernel[index] = value;
+            sum += value;
+        }
+    }
+    
+    // ?????????????????????1
+    for (int i = 0; i < kernel_size * kernel_size; i++) {
+        kernel[i] /= sum;
+    }
+}

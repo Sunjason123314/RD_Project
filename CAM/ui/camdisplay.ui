@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CamDisplay</class>
+ <widget class="QMainWindow" name="CamDisplay">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1007</width>
+    <height>625</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>MainWindow</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QHBoxLayout" name="horizontalLayout" stretch="10,1">
+    <item>
+     <widget class="GL_Image" name="openGLWidget"/>
+    </item>
+    <item>
+     <widget class="QTabWidget" name="tabWidget">
+      <property name="maximumSize">
+       <size>
+        <width>240</width>
+        <height>16777215</height>
+       </size>
+      </property>
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <property name="movable">
+       <bool>false</bool>
+      </property>
+      <property name="tabBarAutoHide">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="tab_3">
+       <attribute name="title">
+        <string>Tab 1</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_2">
+        <item>
+         <layout class="QGridLayout" name="gridLayout">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QPushButton" name="pushButton_open_cam">
+            <property name="text">
+             <string>打开相机</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QPushButton" name="pushButton_startsnap">
+            <property name="text">
+             <string>开始采集</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QPushButton" name="pushButton_close_cam">
+            <property name="text">
+             <string>关闭相机</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QPushButton" name="pushButton_stopsnap">
+            <property name="text">
+             <string>停止采集</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_2">
+          <item row="1" column="2">
+           <widget class="QComboBox" name="comboBox_trigger_source"/>
+          </item>
+          <item row="5" column="1">
+           <widget class="QLabel" name="label_display_Gain">
+            <property name="text">
+             <string>增益设置</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="2">
+           <widget class="QLineEdit" name="lineEdit_exposetime"/>
+          </item>
+          <item row="0" column="2">
+           <widget class="QComboBox" name="comboBox_trigger_model"/>
+          </item>
+          <item row="8" column="2">
+           <widget class="QComboBox" name="comboBox_denoise"/>
+          </item>
+          <item row="3" column="2">
+           <widget class="QComboBox" name="comboBox_trigger_active"/>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLabel" name="label_display">
+            <property name="text">
+             <string>触发模式</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <widget class="QLabel" name="label_display_8">
+            <property name="text">
+             <string>帧率模式</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="2">
+           <widget class="QComboBox" name="comboBox_framrate_mode"/>
+          </item>
+          <item row="3" column="1">
+           <widget class="QLabel" name="label_display_5">
+            <property name="text">
+             <string>触发极性</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="2">
+           <widget class="QLineEdit" name="lineEdit_gain"/>
+          </item>
+          <item row="7" column="2">
+           <widget class="QLineEdit" name="lineEdit_framerate">
+            <property name="placeholderText">
+             <string/>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QLabel" name="label_display_ShutterValue">
+            <property name="text">
+             <string>曝光时间</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QLabel" name="label_display_4">
+            <property name="text">
+             <string>软触发</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLabel" name="label_display_3">
+            <property name="text">
+             <string>触发源</string>
+            </property>
+           </widget>
+          </item>
+          <item row="8" column="1">
+           <widget class="QLabel" name="label_display_10">
+            <property name="text">
+             <string>降噪模式</string>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="1">
+           <widget class="QLabel" name="label_display_FrameRate">
+            <property name="text">
+             <string>帧率设置</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="2">
+           <widget class="QPushButton" name="pushButton_soft_trigger">
+            <property name="text">
+             <string>发送软触发</string>
+            </property>
+           </widget>
+          </item>
+          <item row="9" column="1">
+           <widget class="QLabel" name="label_display_DeNoise">
+            <property name="text">
+             <string>降噪设置</string>
+            </property>
+           </widget>
+          </item>
+          <item row="9" column="2">
+           <widget class="QLineEdit" name="lineEdit_denoise"/>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_4" rowstretch="1,0,0">
+          <property name="horizontalSpacing">
+           <number>7</number>
+          </property>
+          <item row="0" column="1">
+           <widget class="QPushButton" name="pushButton_setsavepath">
+            <property name="text">
+             <string>保存路径</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QCheckBox" name="checkBox_countsave">
+            <property name="text">
+             <string>是否计数存图</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QCheckBox" name="checkBox">
+            <property name="text">
+             <string>是否存图</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="0">
+           <widget class="QPushButton" name="pushButton_saveonce">
+            <property name="text">
+             <string>单次存图</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0" colspan="2">
+           <widget class="QLabel" name="label_savepath_display">
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>TextLabel</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <spacer name="verticalSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QToolBar" name="toolBar">
+   <property name="maximumSize">
+    <size>
+     <width>16777213</width>
+     <height>16777215</height>
+    </size>
+   </property>
+   <property name="windowTitle">
+    <string>toolBar</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="action_switch"/>
+   <addaction name="actionshowLine"/>
+  </widget>
+  <action name="action_switch">
+   <property name="text">
+    <string>隐藏工具</string>
+   </property>
+  </action>
+  <action name="actionshowLine">
+   <property name="text">
+    <string>showLine</string>
+   </property>
+  </action>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>GL_Image</class>
+   <extends>QOpenGLWidget</extends>
+   <header location="global">gl_image.h</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

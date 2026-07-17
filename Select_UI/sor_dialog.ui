@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SORDialog</class>
+ <widget class="QDialog" name="SORDialog">
+  <property name="geometry">
+   <rect><x>0</x><y>0</y><width>380</width><height>220</height></rect>
+  </property>
+  <property name="windowTitle">
+   <string>SOR Filter (Statistical Outlier Removal)</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="labelMeanK">
+     <property name="text"><string>Mean K (nearest neighbors):</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QSpinBox" name="spinMeanK">
+     <property name="minimum"><number>1</number></property>
+     <property name="maximum"><number>5000</number></property>
+     <property name="value"><number>50</number></property>
+     <property name="singleStep"><number>10</number></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="hintMeanK">
+     <property name="text"><string>Larger -> more aggressive outlier removal. Smaller -> preserves more detail, less filtering.</string></property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="labelStddev">
+     <property name="text"><string>StdDev Multiplier:</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDoubleSpinBox" name="spinStddev">
+     <property name="minimum"><double>0.01</double></property>
+     <property name="maximum"><double>100.00</double></property>
+     <property name="value"><double>1.00</double></property>
+     <property name="singleStep"><double>0.10</double></property>
+     <property name="decimals"><number>3</number></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="hintStddev">
+     <property name="text"><string>Larger -> fewer points removed (looser). Smaller -> more points classified as outliers (stricter).</string></property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons"><set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set></property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+</ui>

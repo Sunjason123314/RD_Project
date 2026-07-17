@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>CurvatureAnalysisDialog</class>
+ <widget class="QDialog" name="CurvatureAnalysisDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>442</width>
+    <height>280</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Curvature Analysis</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="labelK">
+     <property name="text">
+      <string>Neighborhood size (k):</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QSpinBox" name="spinK">
+     <property name="minimum">
+      <number>10</number>
+     </property>
+     <property name="maximum">
+      <number>200</number>
+     </property>
+     <property name="singleStep">
+      <number>10</number>
+     </property>
+     <property name="value">
+      <number>30</number>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="hintK">
+     <property name="text">
+      <string>Larger k → wider search radius → better for detecting gentle curves.
+Smaller k → more local detail → sharper edges.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="labelThreshold">
+     <property name="text">
+      <string>Curvature threshold (0=flat, ~0.02=curved, ~0.1+=sharp):</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDoubleSpinBox" name="spinThreshold">
+     <property name="decimals">
+      <number>6</number>
+     </property>
+     <property name="minimum">
+      <double>0.000000000000000</double>
+     </property>
+     <property name="maximum">
+      <double>0.333333000000000</double>
+     </property>
+     <property name="singleStep">
+      <double>0.000001000000000</double>
+     </property>
+     <property name="value">
+      <double>0.000001000000000</double>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="hintThreshold">
+     <property name="text">
+      <string>Only points with curvature &gt;= threshold are marked.
+Check log output for curvature stats (min/max/mean/median) to calibrate.</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

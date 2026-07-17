@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ReconstSurfaceDialog</class>
+ <widget class="QDialog" name="ReconstSurfaceDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>460</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>曲面重建</string>
+  </property>
+  <property name="sizeGripEnabled">
+   <bool>false</bool>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="spacing">
+    <number>8</number>
+   </property>
+   <property name="leftMargin">
+    <number>16</number>
+   </property>
+   <property name="topMargin">
+    <number>12</number>
+   </property>
+   <property name="rightMargin">
+    <number>16</number>
+   </property>
+   <property name="bottomMargin">
+    <number>12</number>
+   </property>
+   <item>
+    <widget class="QLabel" name="labelMethod">
+     <property name="text">
+      <string>重建方法：</string>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">font-weight: bold;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QComboBox" name="comboBox">
+     <property name="toolTip">
+      <string>选择从点云重建三角网格的算法</string>
+     </property>
+     <item>
+      <property name="text">
+       <string>Mesh（贪婪三角化）</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>Poisson（封闭曲面）</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>NURBS（光滑参数曲面）</string>
+      </property>
+     </item>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="labelMethodDesc">
+     <property name="text">
+      <string>贪婪三角化将局部邻域投影到切平面并连接，速度快，适合叶片等单侧扫描的开放曲面。</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">color: #555; padding: 6px; background: #f5f5f5; border-radius: 4px;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxMesh">
+     <property name="title">
+      <string>Mesh 参数</string>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">QGroupBox { font-weight: bold; }</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutMesh">
+      <property name="labelAlignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+      <property name="formAlignment">
+       <set>Qt::AlignHCenter|Qt::AlignTop</set>
+      </property>
+      <property name="horizontalSpacing">
+       <number>12</number>
+      </property>
+      <property name="verticalSpacing">
+       <number>6</number>
+      </property>
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelVoxel">
+        <property name="text">
+         <string>体素叶大小</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="spinBoxVoxel">
+        <property name="suffix">
+         <string> mm</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>10.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="stepType">
+         <enum>QAbstractSpinBox::DefaultStepType</enum>
+        </property>
+        <property name="value">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="toolTip">
+         <string>重建前对点云进行下采样的 3D 网格单元尺寸。值越小保留的细节越多，但计算量更大、对噪声更敏感；值越大速度越快但网格越粗糙。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelAngle">
+        <property name="text">
+         <string>最大曲面角度</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="spinBoxMaxAngle">
+        <property name="suffix">
+         <string>°</string>
+        </property>
+        <property name="decimals">
+         <number>0</number>
+        </property>
+        <property name="minimum">
+         <double>10.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>120.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>5.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>45.000000000000000</double>
+        </property>
+        <property name="toolTip">
+         <string>相邻点法线之间仍被视为同一曲面的最大角度（度）。值越低强制更平滑的连接，有助于剔除尖锐伪影；值越高允许更锋利的边缘通过。</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxPoisson">
+     <property name="title">
+      <string>Poisson 参数</string>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">QGroupBox { font-weight: bold; }</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutPoisson">
+      <property name="labelAlignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+      <property name="horizontalSpacing">
+       <number>12</number>
+      </property>
+      <property name="verticalSpacing">
+       <number>6</number>
+      </property>
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelPoissonDepth">
+        <property name="text">
+         <string>八叉树深度</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinBoxPoissonDepth">
+        <property name="minimum">
+         <number>5</number>
+        </property>
+        <property name="maximum">
+         <number>12</number>
+        </property>
+        <property name="value">
+         <number>8</number>
+        </property>
+        <property name="toolTip">
+         <string>Poisson 重建所用八叉树的最大深度。每增加 1 级空间分辨率翻倍（8 级 ≈ 256³ 体素）。值越高细节越多，但内存和时间呈指数增长。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelPoissonSolverDivide">
+        <property name="text">
+         <string>求解器细分</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinBoxPoissonSolverDivide">
+        <property name="minimum">
+         <number>3</number>
+        </property>
+        <property name="maximum">
+         <number>10</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+        <property name="toolTip">
+         <string>线性系统求解器的子网格采样因子（Gauss-Seidel 多重网格松弛参数）。值越高在更细的子网格上优化解，提高收敛精度，但求解时间更长。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelPoissonIsoDivide">
+        <property name="text">
+         <string>等值面细分</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinBoxPoissonIsoDivide">
+        <property name="minimum">
+         <number>3</number>
+        </property>
+        <property name="maximum">
+         <number>10</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+        <property name="toolTip">
+         <string>Marching cubes 等值面提取的子采样因子。值越高以更细的分辨率采样隐式曲面，输出网格更密、更光滑。</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxNurbs">
+     <property name="title">
+      <string>NURBS 参数</string>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">QGroupBox { font-weight: bold; }</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutNurbs">
+      <property name="labelAlignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+      <property name="horizontalSpacing">
+       <number>12</number>
+      </property>
+      <property name="verticalSpacing">
+       <number>6</number>
+      </property>
+      <item row="0" column="0">
+       <widget class="QLabel" name="labelNurbsOrder">
+        <property name="text">
+         <string>阶数</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="spinBoxNurbsOrder">
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>6</number>
+        </property>
+        <property name="value">
+         <number>3</number>
+        </property>
+        <property name="toolTip">
+         <string>NURBS 曲面的多项式阶数（次数+1）。阶数 3（二次曲面）最常用——光滑且数值稳定。阶数越高曲面越平滑，但在噪声数据上可能产生振荡。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelNurbsRefinement">
+        <property name="text">
+         <string>细化迭代</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinBoxNurbsRefinement">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>20</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+        <property name="toolTip">
+         <string>NURBS 拟合过程中迭代优化（组装+求解）的次数。每次迭代优化控制点位置以更好地逼近输入点云。迭代越多拟合越紧密，但耗时成正比增加。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelNurbsResolution">
+        <property name="text">
+         <string>采样分辨率</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinBoxNurbsResolution">
+        <property name="minimum">
+         <number>16</number>
+        </property>
+        <property name="maximum">
+         <number>256</number>
+        </property>
+        <property name="value">
+         <number>64</number>
+        </property>
+        <property name="toolTip">
+         <string>将拟合后的 NURBS 曲面三角化为网格时，每个参数方向上的采样点数。值越高输出网格越密越光滑（64 → 4096 个面片；256 → 65536 个面片）。</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

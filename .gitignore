@@ -1,0 +1,61 @@
+# ===== 构建产物 =====
+build/
+build*/
+out/
+cmake-build-*/
+*.obj
+*.o
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+*.a
+
+# ===== CMake 生成物 =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+*.cmake.stamp
+
+# ===== Qt 生成物 =====
+# AUTOMOC / AUTOUIC / AUTORCC 生成的中间文件
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+*.moc
+# Qt Creator 本地配置（每台机器不同，不应提交）
+*.user
+*.user.*
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+
+# ===== IDE / 编辑器 =====
+.vscode/
+.vs/
+.idea/
+*.autosave
+
+# ===== 压缩包 / 大文件 =====
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+
+# ===== 临时 / 系统文件 =====
+Thumbs.db
+Desktop.ini
+*.tmp
+*.bak
+*.log
+*~
+
+# ===== 备份 / 回收站（代码整理时若用到 _trash 存放待删文件，不纳入版本） =====
+_trash/
+
+# ===== 说明：以下大目录若确认是无关的第三方副本，建议物理删除而非仅忽略 =====
+# third_party/QXlsx-/   （含多个重复副本，待确认后处理）
