@@ -45,7 +45,6 @@ private:
     std::tuple<Matrix3d, Vector3d, VectorXd> fitEllipsoid(const MatrixXd& points);
     std::pair<Matrix3d, Vector3d> ellipsoidCenter(const VectorXd& coeffs);
     static Matrix3d customRotationMatrix(double theta1, double theta2, double theta3);
-    static void fitSphere(const Eigen::MatrixXd& X, Eigen::Vector3d& center, double& radius);
     struct OptimizationParameters {
         const QVector<QVector<MatrixXd>>* Points_tri;
         const QVector<QVector<MatrixXd>>* sensor_t_all;

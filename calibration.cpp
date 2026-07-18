@@ -212,8 +212,8 @@ void Calibration::nonLinearOptimalMulti(
 
         Vector3d c1, c2;
         double r1, r2;
-        Calibration::fitSphere(P1_shifted, c1, r1);
-        Calibration::fitSphere(P2_shifted, c2, r2);
+        Point_Algorithm::fitSphereLeastSquares(P1_shifted, c1, r1);
+        Point_Algorithm::fitSphereLeastSquares(P2_shifted, c2, r2);
 
         center_all[0][k] = c1;
         center_all[1][k] = c2;
@@ -224,13 +224,6 @@ void Calibration::nonLinearOptimalMulti(
 
     radius_1 = std::accumulate(d1.begin(), d1.end(), 0.0) / d1.size();
     radius_2 = std::accumulate(d2.begin(), d2.end(), 0.0) / d2.size();
-}
-
-
-// === 拟合球函数 ===
-void Calibration::fitSphere(const MatrixXd& X, Vector3d& center, double& radius)
-{
-    Point_Algorithm::fitSphereLeastSquares(X, center, radius);
 }
 
 
@@ -267,8 +260,8 @@ int Calibration::FittingObjective::operator()(const VectorXd& param, VectorXd& r
 
         Vector3d c1, c2;
         double r1, r2;
-        Calibration::fitSphere(P1_shifted, c1, r1);
-        Calibration::fitSphere(P2_shifted, c2, r2);
+        Point_Algorithm::fitSphereLeastSquares(P1_shifted, c1, r1);
+        Point_Algorithm::fitSphereLeastSquares(P2_shifted, c2, r2);
 
         residual(3 * k + 0) = r1 - params->real_r_1;
         residual(3 * k + 1) = r2 - params->real_r_2;
