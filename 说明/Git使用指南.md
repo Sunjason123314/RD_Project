@@ -1,7 +1,26 @@
 # Git 使用指南 — blade_measurement 项目
 
-> 面向 Git 新手。按本文操作即可完成日常的「改代码 → 校验 → 提交 → 推送」。
-> 记录时间：2026-07-17　目标远程平台：GitHub
+> 面向**完全没用过 Git 的新手**。从「装软件、建仓库」讲起，一直到「日常提交、下载、更新」。
+> 更新时间：2026-07-18　远程平台：GitHub（私有仓库）
+> 远程地址：`https://github.com/Sunjason123314/blade_measurement.git`
+
+---
+
+## ⭐ 速查表（装好、建好仓库后，日常照抄这几条）
+
+> 前提：终端已在项目目录里（提示符显示 `...blade_measurement_v3.3.4>`）。
+> 若不在，先切进去：`cd /d e:\Code\QT\blade_measurement\blade_measurement_v3.3.4`
+
+| 我想做什么 | 命令 |
+|---|---|
+| 改了几个文件，全部上传 | `git add -A` → `git commit -m "说明"` → `git push` |
+| 只上传其中一部分 | `git add 文件名` → `git commit -m "说明"` → `git push` |
+| 换电脑第一次下载 | `git clone https://github.com/Sunjason123314/blade_measurement.git` |
+| 同步 GitHub 最新版 | `git pull` |
+| 看当前状态 | `git status` |
+| 看提交历史 | `git log --oneline` |
+
+核心心法：**改动不会自动进历史**。永远是三步 —— `add`（选要提交的）→ `commit`（存快照）→ `push`（传上去）。
 
 ---
 
@@ -9,235 +28,255 @@
 
 | 概念 | 大白话 |
 |---|---|
-| **仓库 repository** | 一个被 Git 管理的项目文件夹，里面有个隐藏的 `.git` 目录记录所有历史 |
+| **仓库 repository** | 一个被 Git 管理的项目文件夹，内含隐藏的 `.git` 目录记录所有历史 |
 | **工作区 working tree** | 你实际在编辑的文件 |
-| **暂存区 staging / index** | 「准备提交」的清单。改了文件不代表会被提交，得先 `git add` 放进暂存区 |
-| **提交 commit** | 给当前暂存区拍一张快照，永久存进历史，可随时回退 |
-| **分支 branch** | 一条独立的开发线。`main` 是主线，新功能在新分支上做，做完再合并 |
-| **远程 remote** | GitHub 上的那份仓库副本，名字通常叫 `origin` |
-| **推送 push / 拉取 pull** | 把本地提交上传到 GitHub 叫 push，把 GitHub 的更新下载下来叫 pull |
-
-核心心法：**改动不会自动保存进历史**。永远是三步 —— `add`（选要提交的）→ `commit`（存快照）→ `push`（传上去）。
+| **暂存区 staging** | 「准备提交」的清单。改了文件不代表会提交，得先 `git add` 放进来 |
+| **提交 commit** | 给暂存区拍一张快照，永久存进本地历史，可随时回退 |
+| **远程 remote** | GitHub 上那份仓库副本，名字通常叫 `origin` |
+| **推送 push / 拉取 pull** | 本地提交上传 GitHub 叫 push；把 GitHub 更新下载下来叫 pull |
+| **克隆 clone** | 第一次把整个仓库从 GitHub 下载到本地 |
 
 ---
 
-## 1. 一次性准备（只做一次）
+## 1. 从零开始：安装 Git 与一次性配置（每台新电脑只做一次）
 
-### 1.1 配置身份（提交记录里会显示是谁提交的）
+### 1.1 装 Git
+
+到官网 <https://git-scm.com/download/win> 下载 Windows 版，双击安装，一路默认「Next」即可。
+装完验证——打开命令提示符（按 `Win`，输入 `cmd` 回车），敲：
+```bash
+git --version
+```
+显示出版本号（如 `git version 2.xx`）就说明装好了。
+
+### 1.2 配置你的身份（提交记录里会显示是谁提交的，必须先做）
 
 ```bash
 git config --global user.name "你的名字"
-git config --global user.email "你的邮箱@example.com"
+git config --global user.email "你的GitHub邮箱@example.com"
 ```
+> `--global` 表示对这台电脑上所有仓库生效，只需配一次。邮箱建议用 GitHub 账号的邮箱。
 
-> 当前这台机器还没配置过，第一次提交前**必须**先跑这两行，否则提交会报错。
-> 邮箱建议用 GitHub 账号的邮箱。
-
-### 1.2 让中文文件名正常显示（Windows 建议）
+### 1.3 Windows 建议的两条设置
 
 ```bash
-git config --global core.quotepath false
+git config --global core.quotepath false   # 中文文件名正常显示，不再是数字乱码
+git config --global core.autocrlf true      # 自动处理 Windows/Linux 换行符差异
 ```
 
-### 1.3 换行符处理（Windows 建议）
+### 1.4 验证配置
 
 ```bash
-git config --global core.autocrlf true
+git config --global --list
 ```
+能看到刚才填的 `user.name`、`user.email` 就对了。
 
 ---
 
-## 2. 日常操作流程（每天都用）
+## 2. 创建仓库的两种方式
 
-### 2.1 看看现在改了啥 —— `git status`
+你会遇到两种起步情况，对号入座：
+
+### 方式一：本地已经有一堆代码，想开始用 Git 管理它（本项目当初就是这么做的）
+
+**第 1 步：把项目文件夹变成 Git 仓库**
+用终端进到你的项目文件夹，然后初始化：
+```bash
+cd /d e:\你的项目路径
+git init
+```
+`git init` 会创建隐藏的 `.git` 目录，从此这个文件夹就被 Git 管理了。
+
+**第 2 步：写 `.gitignore`（告诉 Git 哪些别管）**
+在项目根目录新建一个名为 `.gitignore` 的文件，把不该提交的写进去，例如：
+```
+build/
+*.obj
+*.exe
+*.user
+.vscode/
+```
+> 否则会把上百 MB 的构建产物、临时文件全提交进去，仓库会又大又乱。
+
+**第 3 步：第一次提交（建立第一个 commit）**
+```bash
+git add -A                          # 把所有该管的文件放进暂存区
+git commit -m "chore: 初始化仓库"    # 拍下第一张快照
+```
+> 这就是你的**第一个 commit**。此时代码还只在本地，GitHub 上还没有。
+
+**第 4 步：在 GitHub 网页上建一个空仓库**
+1. 登录 <https://github.com>，点右上角 `+` → `New repository`
+2. 填仓库名（如 `blade_measurement`）
+3. 选 **Private（私有）**
+4. **不要**勾选 "Add a README" / "Add .gitignore" / "license"（保持空仓库，否则会冲突）
+5. 点 `Create repository`，页面会给你一个地址 `https://github.com/你的用户名/仓库名.git`
+
+**第 5 步：关联远程并首次推送**
+```bash
+git remote add origin https://github.com/你的用户名/仓库名.git   # 关联 GitHub
+git branch -M main                                              # 主分支命名为 main
+git push -u origin main                                         # 首次推送，-u 建立跟踪
+```
+> 若这一步报 `Connection was reset`，是网络问题，见第 5 节配代理。
+> 之后日常推送就只用 `git push`，不用再加 `-u origin main`。
+
+### 方式二：GitHub 上已经有仓库，我要把它下载到本地 —— `git clone`
+
+在你想放代码的**上级文件夹**里执行（不要在已有项目里执行）：
+```bash
+git clone https://github.com/Sunjason123314/blade_measurement.git
+```
+它会自动新建 `blade_measurement` 文件夹，把整个项目和全部历史下载下来，且已自动关联好远程。进去就能直接开始 `git pull` / `git push`。
+
+---
+
+## 3. 日常操作详解（每天都用）
+
+### 3.1 先看状态 —— `git status`
 
 ```bash
 git status
 ```
-
-输出里：
-- 红色 `Changes not staged` = 改了但没 add
-- 绿色 `Changes to be committed` = 已 add，等着 commit
-- `Untracked files` = 全新的、Git 还没管的文件
+- `Changes not staged` = 改了但还没 `add`
+- `Changes to be committed` = 已 `add`，等着 `commit`
+- `Untracked files` = 全新文件，Git 还没管
+- `nothing to commit, working tree clean` = 干净，没有未保存的改动
 
 **任何操作前先跑一次 `git status`，看清状态再动手。**
 
-### 2.2 看具体改了哪几行 —— `git diff`
+### 3.2 看具体改了哪几行 —— `git diff`
 
 ```bash
-git diff                 # 看还没 add 的改动
-git diff --staged        # 看已经 add 的改动
-git diff mainwindow.cpp  # 只看某个文件
+git diff                        # 看还没 add 的改动
+git diff app/mainwindow.cpp     # 只看某个文件
 ```
 
-### 2.3 把改动放进暂存区 —— `git add`
+### 3.3 放进暂存区 —— `git add`（这一步决定「这次推哪些」）
 
 ```bash
-git add mainwindow.cpp mainwindow.h   # 加指定文件（推荐，精确）
-git add pointcloud/                    # 加整个文件夹
-git add -A                             # 加全部改动（谨慎，可能带上不想提交的）
+git add app/mainwindow.cpp app/mainwindow.h   # 只挑指定文件（推荐，精确）
+git add app/                                   # 加整个文件夹
+git add -A                                     # 加全部改动
 ```
 
-> 推荐用「加指定文件」，避免手滑把临时文件、密钥、构建产物一起提交。
+> **这就是「只推一部分」的关键**：你 `add` 了哪些，`commit` 就只包含哪些，`push` 也就只推哪些。
+> 没 `add` 的文件改动会留在本地，不受影响，下次想推再单独 `add` + `commit`。
 
-### 2.4 提交 —— `git commit`
+**加错了想撤出暂存区**（文件改动保留，只是这次不提交）：
+```bash
+git restore --staged app/mainwindow.cpp
+```
+
+### 3.4 提交 —— `git commit`（建立一个新 commit）
 
 ```bash
-git commit -m "修复：拟合球函数重复实现，合并为 fitSphere3D"
+git commit -m "修复：点云加载崩溃问题"
 ```
+`-m` 后面写清楚**做了什么**。建议格式 `类型：说明`：
 
-提交信息（`-m` 后面那句）写清楚**做了什么**。建议格式：
+| 类型 | 含义 |
+|---|---|
+| feat / 新增 | 新功能 |
+| fix / 修复 | 修 bug |
+| refactor / 重构 | 不改功能只调结构 |
+| docs / 文档 | 只改文档 |
+| chore / 清理 | 删无用文件、调依赖 |
 
-```
-类型：一句话说明
+> 什么时候该 commit？**完成一件有意义的事就 commit 一次**（修好一个 bug、加完一个功能）。不用每改一行都提交。
 
-类型可选：
-  新增 / feat     新功能
-  修复 / fix      修 bug
-  重构 / refactor 不改功能只调结构（本次代码整理大多属于这类）
-  文档 / docs     只改文档
-  清理 / chore    删无用文件、调依赖
-```
-
-例：`重构：mainwindow.cpp 按功能分区`、`清理：删除未使用的 QXlsx 副本文件夹`
-
-### 2.5 校验（提交前/后确认没问题）
-
-Git 层面的校验：
+### 3.5 推送 —— `git push`
 
 ```bash
-git status          # 确认该提交的都提交了，工作区干净
-git log --oneline -10   # 看最近 10 条提交历史对不对
-```
-
-代码层面的校验（本项目用 Qt Creator + MSVC 2019 + Ninja）：
-
-1. 在 Qt Creator 里重新构建（Release 目录：`build/Desktop_Qt_5_15_2_MSVC2019_64bit-Release/`）
-2. 确认**编译通过、能正常运行**再推送
-3. 重构类改动尤其要跑一遍关键功能（点云加载、重建、STEP 导出）
-
-> 原则：**先本地编译通过，再推送**。不要把编译不过的代码推上去。
-
-### 2.6 推送到 GitHub —— `git push`
-
-```bash
-git push                       # 已建立跟踪后，直接推
-git push -u origin main        # 第一次推某分支时，-u 建立跟踪关系
+git push                    # 日常就这一个词
+git push -u origin main     # 仅「第一次推某分支」时用（本项目 main 已建立，不用再加）
 ```
 
 ---
 
-## 3. 分支工作流（做较大改动时用，比如这次代码整理）
+## 4. 更新代码 —— `git pull`
 
-不要直接在 `main` 上做大改动。正确做法：开新分支 → 做 → 验证 → 合并回 main。
-
+已有本地代码，想同步 GitHub 上的最新版（别人推的、或你在另一台电脑推的）：
 ```bash
-# 1. 从 main 建并切到新分支
-git checkout -b refactor/mainwindow-split
-
-# 2. 在分支上正常 add / commit（可多次提交）
-git add mainwindow.cpp
-git commit -m "重构：拆分点云相关槽函数到独立分区"
-
-# 3. 推送分支到 GitHub
-git push -u origin refactor/mainwindow-split
-
-# 4. 验证 OK 后，切回 main 合并
-git checkout main
-git merge refactor/mainwindow-split
-
-# 5. 推送 main
-git push
-
-# 6.（可选）删掉已合并的分支
-git branch -d refactor/mainwindow-split
+git pull
 ```
-
-分支命名建议：`refactor/xxx`（重构）、`fix/xxx`（修 bug）、`feat/xxx`（新功能）。
+> **好习惯**：每次开始工作前先 `git pull`，拿到最新代码再改，能减少冲突。
+> 若提示冲突（conflict），先别硬来，把提示贴出来找人帮忙。
+>
+> （第一次下载用 `git clone`，见第 2 节方式二。）
 
 ---
 
-## 4. 后悔药（改错了怎么办）
+## 5. 网络问题（国内访问 GitHub 常见）
+
+`git push` / `git clone` 报 `Connection was reset` 或卡住，几乎都是网络到不了 GitHub。
+注意：`ping github.com` 能通**不代表** git 能推（走的不是同一回事）。
+
+**解决：开代理软件 → 让 git 走代理**（本项目就是这么推送成功的）
+```bash
+# 端口换成你代理软件里显示的实际端口（常见 7890 / 10809 / 1080）
+git config --global http.proxy http://127.0.0.1:7890
+git config --global https.proxy http://127.0.0.1:7890
+```
+配一次即可，以后自动生效（前提是代理软件开着）。
+
+**想取消代理**（换了网络环境）：
+```bash
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+```
+
+---
+
+## 6. 后悔药（改错了怎么办）
 
 ```bash
-# 撤销某文件「还没 add」的改动，恢复到上次提交的样子（改动会丢失，慎用）
-git checkout -- mainwindow.cpp
+# 某文件「还没 add」，想丢弃改动、恢复到上次提交（改动会丢失，慎用）
+git checkout -- app/mainwindow.cpp
 
-# 把已 add 的文件撤出暂存区（改动还在，只是不提交了）
-git restore --staged mainwindow.cpp
+# 已 add，想撤出暂存区（改动还在，只是不提交）
+git restore --staged app/mainwindow.cpp
 
-# 看历史，找到某次提交的 ID（前几位就够）
+# 看历史提交列表
 git log --oneline
 
-# 临时回到某次提交看看（不改变历史）
-git checkout <提交ID>
-git checkout main     # 看完切回来
-
-# 已经 commit 但还没 push，想改最后一次提交信息
+# 已 commit 但还没 push，想改最后一次提交信息
 git commit --amend -m "新的提交信息"
 ```
 
 > ⚠️ 危险命令别乱用：`git reset --hard`、`git push -f`、`git clean -f` 会**永久丢失**改动。
-> 拿不准时先 `git status` + `git log`，或者先复制一份文件夹做备份。
+> 拿不准时先 `git status` + `git log`，或先把文件夹复制一份备份。
 
 ---
 
-## 5. 忽略不该提交的文件 —— `.gitignore`
+## 7. `.gitignore` —— 忽略不该提交的文件
 
-项目根目录的 `.gitignore` 文件列出**不纳入 Git 管理**的东西，比如：
-- `build/`（构建产物，98MB，绝不提交）
-- IDE 缓存、临时文件
-- 密钥、本地配置
+项目根目录的 `.gitignore` 列出**不纳入 Git 管理**的东西：`build/`（构建产物，100+MB）、IDE 缓存、`*.user`、`*.obj/.exe` 等。想忽略新东西，往里加一行文件名/文件夹名即可。
 
-本项目的 `.gitignore` 已按下面「附录」配置好。以后想忽略新东西，往里加一行文件/文件夹名即可。
+> 这份文件**跟着仓库走**（会被提交、团队共享），不是本地专属。
+> 只想「自己本地忽略、不影响别人」的，写进 `.git/info/exclude`。
 
 ---
 
-## 6. 常见问题
+## 8. 常见问题
 
-**Q：`git push` 报错要账号密码 / 认证失败？**
-GitHub 已不支持密码推送，需要用 **Personal Access Token (PAT)** 或 SSH key：
-- PAT：GitHub → Settings → Developer settings → Personal access tokens，生成后当密码用。
-- SSH：`ssh-keygen` 生成密钥，把公钥贴到 GitHub → Settings → SSH keys，远程地址用 `git@github.com:用户名/仓库.git`。
+**Q：`git push` 要账号密码 / 认证失败？**
+GitHub 不支持密码推送，需 **Personal Access Token (PAT)**：
+GitHub → Settings → Developer settings → Personal access tokens → 勾 `repo` 权限，生成后**当密码用**（用户名填 GitHub 用户名）。
 
-**Q：中文提交信息乱码？**
-见 1.2 的 `core.quotepath false`。
+**Q：`fatal: not a git repository`？**
+终端不在项目目录。先 `cd /d e:\Code\QT\blade_measurement\blade_measurement_v3.3.4` 切进去。
 
-**Q：`build/` 已经被提交了怎么移除？**
+**Q：CMD 里切不到 E 盘？**
+先敲 `e:` 回车切到 E 盘，再 `cd 路径`；或一步到位 `cd /d e:\完整路径`。
+
+**Q：中文文件名显示成一串数字乱码？**
+`git config --global core.quotepath false`
+
+**Q：`build/` 被误提交了怎么移除？**
 ```bash
-git rm -r --cached build/    # 从 Git 移除但保留本地文件
+git rm -r --cached build/
 git commit -m "清理：移除误提交的 build 目录"
 ```
 
-**Q：提交历史里想看某文件的演变？**
-```bash
-git log --oneline -- pointcloud/Point_Algorithm.cpp
-```
 
----
-
-## 附录：本项目初始化步骤（建仓库时用，只做一次）
-
-以下命令在 `blade_measurement_v3.3.4` 目录下执行：
-
-```bash
-# 1. 初始化仓库
-git init
-
-# 2. 配置身份（若全局没配过）
-git config user.name "你的名字"
-git config user.email "你的邮箱@example.com"
-
-# 3. .gitignore 已就位（见项目根目录）
-
-# 4. 首次提交
-git add -A
-git commit -m "chore: 初始化仓库，纳入 v3.3.4 代码"
-
-# 5. 在 GitHub 上建一个空仓库（不要勾 README/.gitignore），拿到地址后：
-git remote add origin https://github.com/你的用户名/blade_measurement.git
-git branch -M main
-git push -u origin main
-```
-
-> 之后日常就只用第 2 节的流程。
