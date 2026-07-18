@@ -410,11 +410,6 @@ void DICQGLViewer::draw()
         glEnable(GL_DEPTH_TEST);
     }
 
-    // 绘制拟合平面
-    if (fitted_plane_coefficients.size()==4) {
-        drawFittedPlane();
-    }
-
     // 绘制框选框 / 多边形选框
     if (selecting || multi_corner_selection_enabled) {
         // 切换到2D绘制模式
@@ -1103,95 +1098,6 @@ void DICQGLViewer::highlightSelectedPoints(const std::vector<pcl::PointXYZ>& poi
             glVertex3f(points[i].x, points[i].y, points[i].z);
         }
         glEnd();
-    }
-}
-
-//7.19 平面拟合测试
-void DICQGLViewer::drawFittedPlane()
-{
-    if (fitted_plane_coefficients.size() == 4) {
-        glColor4f(0.10f, 0.62f, 1.0f, 0.28f);//蓝色半透明
-        float a = fitted_plane_coefficients[0];
-        float b = fitted_plane_coefficients[1];
-        float c = fitted_plane_coefficients[2];
-        float d = fitted_plane_coefficients[3];
-
-        // 打印拟合平面的系数
-        //std::cout << "Plane coefficients: a=" << a << ", b=" << b << ", c=" << c << ", d=" << d << std::endl;
-
-        glBegin(GL_QUADS);
-
-        // 定义平面的四个角点，确保足够大以避免过度倾斜
-        float x1 = -100.0f, y1 = -100.0f;
-        float z1 = -(a * x1 + b * y1 + d) / c;
-
-        float x2 = 100.0f, y2 = -100.0f;
-        float z2 = -(a * x2 + b * y2 + d) / c;
-
-        float x3 = 100.0f, y3 = 100.0f;
-        float z3 = -(a * x3 + b * y3 + d) / c;
-
-        float x4 = -100.0f, y4 = 100.0f;
-        float z4 = -(a * x4 + b * y4 + d) / c;
-
-        glVertex3f(x1, y1, z1);
-        glVertex3f(x2, y2, z2);
-        glVertex3f(x3, y3, z3);
-        glVertex3f(x4, y4, z4);
-        glEnd();
-
-        //        // 打印顶点坐标
-        //        std::cout << "Vertex1: x=" << x1 << ", y=" << y1 << ", z=" << z1 << std::endl;
-        //        std::cout << "Vertex2: x=" << x2 << ", y=" << y2 << ", z=" << z2 << std::endl;
-        //        std::cout << "Vertex3: x=" << x3 << ", y=" << y3 << ", z=" << z3 << std::endl;
-        //        std::cout << "Vertex4: x=" << x4 << ", y=" << y4 << ", z=" << z4 << std::endl;
-    }
-}
-//平面拟合
-void DICQGLViewer::fitPlaneToSelection() {
-    if (selected_indices.size() < 3) {
-        std::cerr << "Not enough points to fit a plane" << std::endl;
-        return;
-    }
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr selected_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-    for (int index : selected_indices) {
-        selected_cloud->points.push_back(source_cloud->points[index]);
-    }
-
-    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
-    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
-
-    pcl::SACSegmentation<pcl::PointXYZ> seg;
-    seg.setOptimizeCoefficients(true);
-    seg.setModelType(pcl::SACMODEL_PLANE);
-    seg.setMethodType(pcl::SAC_RANSAC);
-    seg.setDistanceThreshold(0.01);
-
-    seg.setInputCloud(selected_cloud);
-    seg.segment(*inliers, *coefficients);
-
-    // 打印拟合信息
-    std::cout << "Number of selected points: " << selected_indices.size() << std::endl;
-    std::cout << "Number of inliers: " << inliers->indices.size() << std::endl;
-
-    if (coefficients->values.size() == 4) {
-        fitted_plane_coefficients = {coefficients->values[0], coefficients->values[1], coefficients->values[2], coefficients->values[3]};
-        std::cout << "Fitted Plane Coefficients: "
-                  << fitted_plane_coefficients[0] << " "
-                  << fitted_plane_coefficients[1] << " "
-                  << fitted_plane_coefficients[2] << " "
-                  << fitted_plane_coefficients[3] << std::endl;
-
-        // 检查平面系数是否有效
-        if (std::isnan(fitted_plane_coefficients[0]) || std::isnan(fitted_plane_coefficients[1]) ||
-            std::isnan(fitted_plane_coefficients[2]) || std::isnan(fitted_plane_coefficients[3])) {
-            std::cerr << "Invalid plane coefficients, cannot draw the plane" << std::endl;
-            fitted_plane_coefficients.clear();
-        }
-    } else {
-        std::cerr << "Failed to fit a plane" << std::endl;
-        fitted_plane_coefficients.clear();
     }
 }
 

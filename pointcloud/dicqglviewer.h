@@ -236,9 +236,6 @@ private:
     int pickLineAtScreen(int x, int y, float maxPixelDistance = 8.0f) const;
     /*******************平面拟合*****************/
     void DICQGLViewer::performAreaSelection();
-    void DICQGLViewer::fitPlaneToSelection();
-    void DICQGLViewer::drawFittedPlane();
-    std::vector<float> fitted_plane_coefficients;
     /*******************CUDA-VBO*****************/
     //cudaGraphicsResource *cuda_vbo_resource; // CUDA VBO 资源（如果你计划使用 CUDA 进行点云数据处理（例如数据转换、滤波、计算等），然后再绘制处理后的数据，那么你需要使用 cudaGraphicsResource）
     /*******************表面重建*****************/
