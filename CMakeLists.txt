@@ -56,28 +56,28 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Core Gui SerialBu
 
 # 主程序源文件
 set(SOURCES
-    main.cpp
-    mainwindow.cpp
-    sl_integration_runner.cpp
+    app/main.cpp
+    app/mainwindow.cpp
+    SL_QT/sl_integration_runner.cpp
     CF_sensor/confocalsensorworker.cpp
     thread/threadmanager.cpp
-    calibration.cpp
-    file_read_write.cpp
+    utils/calibration.cpp
+    utils/file_read_write.cpp
     # Pushcontrollerfinal.cpp
     PLC/plc.cpp
     PLC/plcconnect.cpp
     CF_sensor/logindialog.cpp
     CF_sensor/qcustomplot.cpp
-    morecolordialog.cpp
+    ui/morecolordialog.cpp
 )
 
 # 头文件
 set(HEADERS
-    mainwindow.h
+    app/mainwindow.h
     CF_sensor/confocalsensorworker.h
     thread/threadmanager.h
-    calibration.h
-    file_read_write.h
+    utils/calibration.h
+    utils/file_read_write.h
     PLC/plc.h
     # Pushcontrollerfinal.h
     PLC/plcconnect.h
@@ -87,16 +87,16 @@ set(HEADERS
     CF_sensor/CFxxxx_Lib/src_inc/CF_ParameterDefine.h
     CF_sensor/CFxxxx_Lib/src_inc/CF_UserInterface.h
     CF_sensor/CFxxxx_Lib/src_inc/TypeDefine.h
-    sl_integration_runner.h
-    morecolordialog.h
+    SL_QT/sl_integration_runner.h
+    ui/morecolordialog.h
 )
 
 # UI 文件
 set(UIS
-    mainwindow.ui
+    app/mainwindow.ui
     PLC/plcconnect.ui
     CF_sensor/logindialog.ui
-    morecolordialog.ui
+    ui/morecolordialog.ui
     Select_UI/stltopcd_dialog.ui
     Select_UI/reconst_surface_dialog.ui
     Select_UI/sor_dialog.ui
@@ -214,12 +214,12 @@ add_executable(auto_measurement_cmake
     ${CAM_SOURCE}
     ${QGL_SOURCE}
     ${SL_QT_SOURCE}
-    include.h
+    app/include.h
 
 
-    jogpanel.h
-    jogpanel.cpp
-    jogpanel.ui
+    ui/jogpanel.h
+    ui/jogpanel.cpp
+    ui/jogpanel.ui
 
 
 
@@ -228,7 +228,7 @@ add_executable(auto_measurement_cmake
 # 解决主工程 Calibration 与 SL_QT Calibration 的同名冲突：
 # 仅对 SL_QT 核心源和集成入口做编译期类名重写（Calibration -> SLCalibration）。
 set_source_files_properties(
-    sl_integration_runner.cpp
+    SL_QT/sl_integration_runner.cpp
     SL_QT/src/class/calibration.cpp
     SL_QT/src/class/calibration.cu
     SL_QT/src/class/matcher.cpp
@@ -247,8 +247,15 @@ if(MSVC)
 endif()
 
 # 包含路径
+# 注意：utils/ 必须排在 SL_QT/src/class 之前，
+# 因为主工程 utils/calibration.h 与 SL_QT/src/class/calibration.h 同名，
+# app/include.h 里的 #include "calibration.h" 需优先解析到主工程版本。
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils
+    ${CMAKE_CURRENT_SOURCE_DIR}/SL_QT
     ${CMAKE_CURRENT_SOURCE_DIR}/CF_sensor
     ${CMAKE_CURRENT_SOURCE_DIR}/CF_sensor/CFxxxx_Lib/src_inc
     ${CMAKE_CURRENT_SOURCE_DIR}/PLC
