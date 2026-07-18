@@ -8,7 +8,7 @@ set(USECUDA ON)
 if(USECUDA)
     message("Define USECUDA!")
 endif()
-
+# test
 if(USECUDA)
     # 设置 CUDA 架构目标
     # 75 对应 NVIDIA GeForce GTX 1660 Ti / Super 等 Turing 架构显卡
