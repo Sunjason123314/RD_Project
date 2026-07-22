@@ -203,7 +203,6 @@ private slots:
     void on_groupnumber_confirm_clicked();
     void on_picturenumber_confirm_clicked();
     void on_horizontalSlider_sliderReleased();
-    void on_pushButton_readCurrent_clicked();
     void on_saverootpath_confirm_clicked();
     void on_select_subpath_clicked();
     void on_Calculate_SL_clicked();

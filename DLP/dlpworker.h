@@ -44,8 +44,6 @@ public slots:
     void stopInternalPatternProjection();
     void displayGridLines();
     void setBrightness(int brightness);
-    // 读取当前蓝光电流强度，通过 brightnessChanged 信号回传 GUI 刷新显示。
-    void readCurrent();
     // illuminationTimeUs/preDarkTimeUs/postDarkTimeUs 为每张图案的明亮/前黑暗/后黑暗时间(微秒)，由界面传入。
     void input1DImageSet8bitV(const DlpImageSet& imageSets,
                               int illuminationTimeUs,
@@ -63,8 +61,8 @@ signals:
     // 亮度设置完成后返回实际蓝光电流，GUI 线程据此刷新滑块和标签。
     void brightnessChanged(int blueLedCurrent);
 
-    // 读取当前电流的结果回传。fromCache=true 表示硬件读失败、返回的是上次写入的缓存值。
-    void currentRead(int blueLedCurrent, int maxBlueLedCurrent, bool fromCache);
+    // 烧录进度：percent 0~100，stage 为阶段描述。用于 GUI 刷新烧录进度条。
+    void burnProgress(int percent, const QString& stage);
 
     void logMessage(const QString& message);
     void operationFailed(const QString& operation, const QString& reason);

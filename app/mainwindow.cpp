@@ -285,15 +285,25 @@ void MainWindow::initDlpThread()
                 ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent));
             }, Qt::QueuedConnection);
 
-    connect(dlpWorker, &DlpWorker::currentRead,
-            this, [this](int blueLedCurrent, int maxBlueLedCurrent, bool fromCache) {
-                QSignalBlocker blockerSlider(ui->horizontalSlider);
-                ui->horizontalSlider->setValue(blueLedCurrent);
-                // 显示 当前值/上限，读失败时标注为缓存值，提示这是软件记录而非硬件真读。
-                const QString suffix = fromCache ? QStringLiteral(" (cached)") : QString();
-                ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent)
-                                           + QStringLiteral(" / ") + QString::number(maxBlueLedCurrent)
-                                           + suffix);
+    connect(dlpWorker, &DlpWorker::burnProgress,
+            this, [this](int percent, const QString& stage) {
+                if(percent < 0)
+                {
+                    // 烧录失败：隐藏进度条。
+                    ui->progressBar_burn->setVisible(false);
+                    return;
+                }
+                ui->progressBar_burn->setVisible(true);
+                ui->progressBar_burn->setValue(percent);
+                ui->progressBar_burn->setFormat(stage + QStringLiteral(" %p%"));
+                if(percent >= 100)
+                {
+                    // 完成后延时隐藏，让用户看到 100%。
+                    QTimer::singleShot(1500, this, [this]() {
+                        if(ui && ui->progressBar_burn)
+                            ui->progressBar_burn->setVisible(false);
+                    });
+                }
             }, Qt::QueuedConnection);
 
     connect(dlpWorker, &DlpWorker::logMessage,
@@ -5559,23 +5569,6 @@ void MainWindow::on_horizontalSlider_sliderReleased()
                               "setBrightness",
                               Qt::QueuedConnection,
                               Q_ARG(int, brightness));
-}
-
-
-void MainWindow::on_pushButton_readCurrent_clicked()
-{
-    if(!dlpInitialized || !dlpWorker)
-    {
-        QMessageBox::warning(this,
-                             QStringLiteral("Warning"),
-                             QStringLiteral("Please connect DLP first"));
-        return;
-    }
-
-    // 读取当前电流：结果通过 currentRead 信号异步回传，刷新 label_current 显示。
-    QMetaObject::invokeMethod(dlpWorker,
-                              "readCurrent",
-                              Qt::QueuedConnection);
 }
 
 

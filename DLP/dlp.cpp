@@ -1,5 +1,6 @@
 #include "dlp.h"
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
@@ -79,7 +80,8 @@ void LogShortStatus(const DLPC347X_ShortStatus_s& status)
          << endl;
 }
 
-bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
+bool WaitForFlashEraseComplete(uint32_t timeoutSeconds,
+                               const std::function<void(int)>& eraseProgress = {})
 {
     const auto start = std::chrono::steady_clock::now();
     const auto deadline = start + std::chrono::seconds(timeoutSeconds);
@@ -87,7 +89,9 @@ bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
     // 但写命令(含 WriteFlashErase)正常。擦除 entire sens pattern 区域是写命令触发的
     // 异步操作，通常数秒内完成。因此当读状态始终不可用时，盲等固定时长后即视为擦除
     // 完成并继续烧录，避免因读不回状态而死等超时、进而让投影仪长时间无响应。
-    const auto blindWaitDuration = std::chrono::seconds(6);
+    // DLP4710(1080p 双 DMD)的图案 flash 区域较大，擦除整个 sens pattern 区域耗时较长，
+    // 6 秒往往不够；擦除未完成时 flash 处于 busy，此时发写命令会失败。故盲等放大到 25 秒。
+    const auto blindWaitDuration = std::chrono::seconds(25);
     DLPC347X_ShortStatus_s shortStatus = {};
     uint32_t readRetryCount = 0;
     bool anyReadSucceeded = false;
@@ -102,6 +106,16 @@ bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
                  << status << ", retry=" << readRetryCount << endl;
 
             const auto now = std::chrono::steady_clock::now();
+
+            // 盲等期间按已过时间比例上报擦除进度，让进度条在这段最耗时的等待里持续走动。
+            if(eraseProgress)
+            {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+                const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(blindWaitDuration).count();
+                int pct = total > 0 ? static_cast<int>(elapsed * 100 / total) : 100;
+                if(pct > 100) pct = 100;
+                eraseProgress(pct);
+            }
 
             // 读状态从未成功过(板卡不支持稳定读回)且已盲等足够久：判定擦除已完成。
             if(!anyReadSucceeded && (now - start) >= blindWaitDuration)
@@ -613,8 +627,9 @@ void WriteLookSelect(uint8_t LookNumber)
 
 void LoadPreBuildPatternData()
 {
-    /* write up to 1024 bytes of data */
-    uint8_t PatternDataArray[1024];
+    /* 块大小统一使用 FLASH_WRITE_BLOCK_SIZE，避免硬编码 1024 超过 Cypress 桥单次写上限。 */
+    uint8_t PatternDataArray[FLASH_WRITE_BLOCK_SIZE];
+    const uint16_t blockSize = FLASH_WRITE_BLOCK_SIZE;
 
     /* Pattern File assumes to be in the \build\vs2017\dlpc347x folder */
     s_FilePointer = fopen("pattern_data_gui.bin", "rb");
@@ -638,17 +653,17 @@ void LoadPreBuildPatternData()
         return;
     }
 
-    DLPC347X_WriteFlashDataLength(1024);
+    DLPC347X_WriteFlashDataLength(blockSize);
     fread(PatternDataArray, sizeof(PatternDataArray), 1, s_FilePointer);
-    DLPC347X_WriteFlashStart(1024, PatternDataArray);
+    DLPC347X_WriteFlashStart(blockSize, PatternDataArray);
 
-    int32_t BytesLeft = PatternDataSize - 1024;
+    int32_t BytesLeft = PatternDataSize - blockSize;
     do
     {
         fread(PatternDataArray, sizeof(PatternDataArray), 1, s_FilePointer);
-        DLPC347X_WriteFlashContinue(1024, PatternDataArray);
+        DLPC347X_WriteFlashContinue(blockSize, PatternDataArray);
 
-        BytesLeft = BytesLeft - 1024;
+        BytesLeft = BytesLeft - blockSize;
     } while (BytesLeft > 0);
 
     fclose(s_FilePointer);
@@ -863,6 +878,12 @@ uint16_t DLP::ReadCurrentBlueCurrent(bool* outFromCache)
     return BlueLedCurrent;
 }
 
+void DLP::reportProgress(int percent, const std::string& stage)
+{
+    if(m_progressCallback)
+        m_progressCallback(percent, stage);
+}
+
 bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
                                  int illuminationTimeUs,
                                  int preDarkTimeUs,
@@ -870,6 +891,8 @@ bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
 {
     if(!IsDeviceReady(device_on, "Input1DImageSet_8bit_V"))
         return false;
+
+    reportProgress(0, "准备数据");
 
     // 传入非正数时回退到默认 40000us，避免出现 0 明亮时间等非法配置。
     const uint32_t illumTime = illuminationTimeUs > 0 ? static_cast<uint32_t>(illuminationTimeUs) : 40000u;
@@ -961,12 +984,18 @@ bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
         return false;
 
     /* Erase the flash sectors that store pattern data */
+    reportProgress(5, "擦除 Flash");
     if(!IsDlpcCommandSuccessful(DLPC347X_WriteFlashErase(), "DLPC347X_WriteFlashErase"))
         return false;
 
     /* Read Short Status to make sure Erase is completed */
-    if(!WaitForFlashEraseComplete(30))
+    // 擦除是烧录最耗时的阶段(盲等 25 秒)，把它映射到进度条 5%~60% 区间持续走动。
+    if(!WaitForFlashEraseComplete(30, [this](int erasePct) {
+                                          reportProgress(5 + erasePct * 55 / 100, "擦除 Flash");
+                                      }))
         return false;
+
+    reportProgress(60, "写入图案数据");
 
     /* To program the flash, send blocks of data of up to 1024 bytes
      * to the controller at a time. Repeat the process until the entire
@@ -1020,6 +1049,7 @@ bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
             return false;
     }
 
+    reportProgress(90, "加载图案表");
     DLPC347X_PatternOrderTableEntry_s ReloadPatternOrderTableEntry = {};
     if(!IsDlpcCommandSuccessful(DLPC347X_WritePatternOrderTableEntry(DLPC347X_WC_RELOAD_FROM_FLASH,
                                                                      &ReloadPatternOrderTableEntry),
@@ -1048,6 +1078,8 @@ bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
         return false;
     if(!InternalPatternControl(DLPC347X_PC_START, 0))
         return false;
+
+    reportProgress(100, "烧录完成");
 
 //    for (int i = 0; i < total_size; i++)
 //    {
