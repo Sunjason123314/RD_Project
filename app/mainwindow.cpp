@@ -21,6 +21,7 @@
 #include <QtCharts/QValueAxis>
 #include <QtCharts/QChartView>
 #include <QGridLayout>
+#include <QSplitter>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QSlider>
@@ -96,6 +97,9 @@ MainWindow::MainWindow(QWidget *parent)
     // 启动时即把光谱共焦的 5 个设置分页移入独立对话框，使主界面 tabWidget_tri
     // 一开始就只保留其余分页（对话框此时不显示，点菜单 actionCF_Sensor 才弹出）。
     initConfocalSettingsDialog();
+
+    // 把主 Tab 与信息输出框放进上下 QSplitter，使二者之间的分隔条可拖动调整高度。
+    setupCentralSplitter();
 
     if(ui->RT_Matrix)
         ui->RT_Matrix->setEnabled(false);  // disabled until coarse registration succeeds
@@ -2420,6 +2424,40 @@ void MainWindow::initTimers()
 
 
 
+}
+
+void MainWindow::setupCentralSplitter()
+{
+    // 目标：让「信息输出框」上方的分隔条可以拖动，从而调整它与主 Tab 的高度比例。
+    // 原布局中二者直接放在 gridLayoutCentral 里，QGridLayout 无法拖动，故改为塞进 QSplitter。
+    if(!ui->Tab_Main || !ui->groupBoxMessageExport)
+        return;
+
+    QWidget* central = ui->centralwidget;
+    auto* centralLayout = qobject_cast<QGridLayout*>(central->layout());
+    if(!centralLayout)
+        return;
+
+    // 信息框原有 maximumSize 高度 160 的硬限制会导致拖大被卡住，这里放开高度上限。
+    ui->groupBoxMessageExport->setMaximumHeight(QWIDGETSIZE_MAX);
+
+    // 从原布局中移除两个控件，交给 splitter 接管（setWidget 会自动 reparent）。
+    centralLayout->removeWidget(ui->Tab_Main);
+    centralLayout->removeWidget(ui->groupBoxMessageExport);
+
+    auto* splitter = new QSplitter(Qt::Vertical, central);
+    splitter->setObjectName(QStringLiteral("centralSplitter"));
+    splitter->setChildrenCollapsible(false);       // 禁止把某一块拖到完全消失
+    splitter->setHandleWidth(6);
+    splitter->addWidget(ui->Tab_Main);              // 上：主 Tab
+    splitter->addWidget(ui->groupBoxMessageExport); // 下：信息输出框
+
+    // 拖动时优先拉伸上方 Tab，信息框保持相对稳定。
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 0);
+    splitter->setSizes(QList<int>() << 760 << 160); // 初始高度，贴近原先 160 的信息框高度
+
+    centralLayout->addWidget(splitter, 0, 0, 2, 1); // 占据原来两行的位置
 }
 
 void MainWindow::initial_UI()

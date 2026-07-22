@@ -189,6 +189,7 @@ git commit -m "修复：点云加载崩溃问题"
 
 ```bash
 git push                    # 日常就这一个词
+git push group main
 git push -u origin main     # 仅「第一次推某分支」时用（本项目 main 已建立，不用再加）
 ```
 

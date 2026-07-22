@@ -469,6 +469,8 @@ private:
     // ==================== 手动点动内部控制函数与键盘状态 ====================
     void setJogButtonDown(JogAxis axis, JogDir dir, bool down);
     void initial_UI();
+    // 将主 Tab 与信息输出框放入可拖动的上下 QSplitter，分隔条可调整二者高度。
+    void setupCentralSplitter();
     void setupPointCloudWorkspaceUi();
     void stylePointCloudWorkspace();
     void refreshPointCloudWorkspaceState();
