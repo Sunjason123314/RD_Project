@@ -36,7 +36,7 @@
     <item row="0" column="0">
      <widget class="QTabWidget" name="Tab_Main">
       <property name="currentIndex">
-       <number>0</number>
+       <number>1</number>
       </property>
       <widget class="QWidget" name="tri_control">
        <attribute name="title">
@@ -3808,51 +3808,17 @@ QPushButton::disabled{
             <string>相机与投影仪</string>
            </attribute>
            <layout class="QGridLayout" name="gridLayout_39">
-            <item row="1" column="0">
-             <layout class="QGridLayout" name="gridLayout_20" columnstretch="1,3,1">
-              <property name="bottomMargin">
-               <number>0</number>
-              </property>
-              <item row="1" column="2">
-               <widget class="QPushButton" name="pushButton_OperatingModeSelect">
-                <property name="text">
-                 <string>set</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="2">
-               <widget class="QPushButton" name="pushButton_testpartteb">
-                <property name="text">
-                 <string>条纹图案</string>
-                </property>
-               </widget>
-              </item>
-              <item row="1" column="1">
-               <widget class="QComboBox" name="comboBox_DLP_OperatingModeSelect"/>
-              </item>
-              <item row="0" column="1">
-               <widget class="QPushButton" name="pushButton_display">
-                <property name="text">
-                 <string>连接投影仪</string>
-                </property>
-               </widget>
-              </item>
-              <item row="2" column="0">
-               <widget class="QSpinBox" name="spinBox_partten_times"/>
-              </item>
-              <item row="2" column="1">
-               <widget class="QComboBox" name="comboBox_DLP_InternalPatternControl"/>
-              </item>
-              <item row="2" column="2">
-               <widget class="QPushButton" name="pushButton_InternalPatternControl">
-                <property name="text">
-                 <string>set</string>
-                </property>
-               </widget>
-              </item>
-             </layout>
-            </item>
             <item row="4" column="0">
+             <widget class="QLabel" name="label_current">
+              <property name="text">
+               <string>亮度控制</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item row="5" column="0">
              <widget class="QSlider" name="horizontalSlider">
               <property name="maximum">
                <number>2500</number>
@@ -3861,6 +3827,19 @@ QPushButton::disabled{
                <enum>Qt::Horizontal</enum>
               </property>
              </widget>
+            </item>
+            <item row="6" column="0">
+             <spacer name="verticalSpacer_8">
+              <property name="orientation">
+               <enum>Qt::Vertical</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>40</height>
+               </size>
+              </property>
+             </spacer>
             </item>
             <item row="0" column="0">
              <layout class="QGridLayout" name="gridLayout_19">
@@ -3904,61 +3883,98 @@ QPushButton::disabled{
               </item>
              </layout>
             </item>
-            <item row="5" column="0">
-             <spacer name="verticalSpacer_8">
-              <property name="orientation">
-               <enum>Qt::Vertical</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>20</width>
-                <height>40</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item row="3" column="0">
-             <widget class="QLabel" name="label_current">
-              <property name="text">
-               <string>亮度控制</string>
-              </property>
-              <property name="alignment">
-               <set>Qt::AlignCenter</set>
-              </property>
-             </widget>
-            </item>
             <item row="2" column="0">
              <layout class="QGridLayout" name="gridLayout_36">
               <item row="2" column="0">
-               <widget class="QLineEdit" name="base_root_dlp"/>
-              </item>
-              <item row="2" column="1">
-               <widget class="QPushButton" name="SelectPatternroot">
-                <property name="text">
-                 <string>选择地址</string>
+               <widget class="QSpinBox" name="picturenumber">
+                <property name="value">
+                 <number>12</number>
                 </property>
                </widget>
               </item>
-              <item row="0" column="1">
+              <item row="5" column="1">
+               <widget class="QPushButton" name="pushButton_OperatingModeSelect">
+                <property name="text">
+                 <string>set</string>
+                </property>
+               </widget>
+              </item>
+              <item row="6" column="0">
+               <layout class="QHBoxLayout" name="horizontalLayout_11"/>
+              </item>
+              <item row="4" column="1">
+               <widget class="QPushButton" name="pushButton_testpartteb">
+                <property name="text">
+                 <string>条纹图案</string>
+                </property>
+               </widget>
+              </item>
+              <item row="5" column="0">
+               <widget class="QComboBox" name="comboBox_DLP_OperatingModeSelect"/>
+              </item>
+              <item row="2" column="1">
+               <widget class="QPushButton" name="picturenumber_confirm">
+                <property name="text">
+                 <string>每组图像数量</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
                <widget class="QPushButton" name="groupnumber_confirm">
                 <property name="text">
                  <string>组数确认</string>
                 </property>
                </widget>
               </item>
-              <item row="0" column="0">
-               <widget class="QSpinBox" name="groupnumber"/>
-              </item>
-              <item row="3" column="0">
-               <layout class="QHBoxLayout" name="horizontalLayout_11"/>
-              </item>
               <item row="1" column="0">
-               <widget class="QSpinBox" name="picturenumber"/>
+               <widget class="QSpinBox" name="groupnumber">
+                <property name="value">
+                 <number>3</number>
+                </property>
+               </widget>
               </item>
-              <item row="1" column="1">
-               <widget class="QPushButton" name="picturenumber_confirm">
+              <item row="4" column="0">
+               <widget class="QPushButton" name="pushButton_display">
                 <property name="text">
-                 <string>每组图像数量</string>
+                 <string>连接投影仪</string>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="0">
+               <widget class="QLineEdit" name="base_root_dlp"/>
+              </item>
+              <item row="0" column="1">
+               <widget class="QPushButton" name="SelectPatternroot">
+                <property name="text">
+                 <string>选择地址</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item row="3" column="0">
+             <layout class="QGridLayout" name="gridLayout_20" columnstretch="1,3,1">
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item row="2" column="0">
+               <widget class="QPushButton" name="pushButton_ProjectOnce">
+                <property name="text">
+                 <string>投影一次</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="1">
+               <widget class="QPushButton" name="pushButton_ProjectContinuous">
+                <property name="text">
+                 <string>持续投影</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="2">
+               <widget class="QPushButton" name="pushButton_ProjectStop">
+                <property name="text">
+                 <string>停止</string>
                 </property>
                </widget>
               </item>

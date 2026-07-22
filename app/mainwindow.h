@@ -189,7 +189,9 @@ private slots:
     // ==================== 相机、DLP 与投影控制 ====================
     void on_pushButton_display_clicked();
     void on_pushButton_OperatingModeSelect_clicked();
-    void on_pushButton_InternalPatternControl_clicked();
+    void on_pushButton_ProjectOnce_clicked();
+    void on_pushButton_ProjectContinuous_clicked();
+    void on_pushButton_ProjectStop_clicked();
     void on_pushButton_testui_clicked();
     void on_pushButton_refresh_device_clicked();
     void on_pushButton_snapall_clicked();

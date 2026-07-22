@@ -119,6 +119,47 @@ void DlpWorker::internalPatternControl(const QString& patternControlName, int ti
     emit logMessage(tr("DLP internal pattern command sent: %1").arg(patternControlName));
 }
 
+void DlpWorker::startInternalPatternProjection(int times)
+{
+    if(!ensureInitialized(tr("Start DLP projection")))
+        return;
+
+    // PC_START 只在内部图案模式下有效，因此先强制切到 SENS_INTERNAL_PATTERN，
+    // 再启动图案序列。这样上层点一个按钮即可可靠开始投影，无需关心操作模式的先后顺序。
+    if(!m_dlp->SelectOperatingMode(DLPC347X_OM_SENS_INTERNAL_PATTERN))
+    {
+        emit operationFailed(tr("Start DLP projection"),
+                             tr("Failed to switch to internal pattern mode. Please check projector connection."));
+        return;
+    }
+
+    // times=1 只播放一遍就停；times<=0 底层按 0xFF(无限循环)处理，持续投影直到 STOP。
+    if(!m_dlp->InternalPatternControl(DLPC347X_PC_START, times))
+    {
+        emit operationFailed(tr("Start DLP projection"),
+                             tr("DLP command write failed. Please check projector connection."));
+        return;
+    }
+
+    emit logMessage(times == 1 ? tr("DLP projection started (project once).")
+                               : tr("DLP projection started (continuous)."));
+}
+
+void DlpWorker::stopInternalPatternProjection()
+{
+    if(!ensureInitialized(tr("Stop DLP projection")))
+        return;
+
+    if(!m_dlp->InternalPatternControl(DLPC347X_PC_STOP, 0))
+    {
+        emit operationFailed(tr("Stop DLP projection"),
+                             tr("DLP command write failed. Please check projector connection."));
+        return;
+    }
+
+    emit logMessage(tr("DLP projection stopped (PC_STOP)."));
+}
+
 void DlpWorker::displayGridLines()
 {
     if(!ensureInitialized(tr("Display DLP grid lines")))

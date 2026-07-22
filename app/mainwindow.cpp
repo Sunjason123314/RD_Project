@@ -259,7 +259,6 @@ void MainWindow::initDlpThread()
                 dlpInitialized = true;
 
                 QSignalBlocker blockerOperatingMode(ui->comboBox_DLP_OperatingModeSelect);
-                QSignalBlocker blockerPatternControl(ui->comboBox_DLP_InternalPatternControl);
                 QSignalBlocker blockerSlider(ui->horizontalSlider);
 
                 ui->comboBox_DLP_OperatingModeSelect->clear();
@@ -267,8 +266,8 @@ void MainWindow::initDlpThread()
                 if(!currentOperatingModeName.isEmpty())
                     ui->comboBox_DLP_OperatingModeSelect->setCurrentText(currentOperatingModeName);
 
-                ui->comboBox_DLP_InternalPatternControl->clear();
-                ui->comboBox_DLP_InternalPatternControl->addItems(patternControlNames);
+                // 图案控制已改为三个按钮(投影一次/持续投影/停止)，不再需要下拉框，patternControlNames 保留不用。
+                Q_UNUSED(patternControlNames);
 
                 ui->horizontalSlider->setMaximum(maxBlueLedCurrent);
                 ui->horizontalSlider->setValue(blueLedCurrent);
@@ -2474,12 +2473,9 @@ QSpinBox {
     color: #2f3b4a;
 }
 
-QComboBox::drop-down,
-QSpinBox::down-button,
-QSpinBox::up-button,
-QDoubleSpinBox::down-button,
-QDoubleSpinBox::up-button {
+QComboBox::drop-down {
     subcontrol-origin: padding;
+    subcontrol-position: center right;
     width: 24px;
     border: none;
     background: transparent;
@@ -2493,6 +2489,81 @@ QComboBox::down-arrow {
     border-right: 5px solid transparent;
     border-top: 6px solid #5b6f86;
     margin-right: 6px;
+}
+
+/* 下拉弹出列表：单独设置背景、圆角和 item 高度，避免下拉项文字显示不全 */
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d5dde8;
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+    selection-background-color: #4f86c6;
+    selection-color: #ffffff;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 2px 8px;
+}
+
+/* SpinBox 上下按钮：分别定位到右上/右下角，保留可点击区域 */
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    border: none;
+    border-top-right-radius: 10px;
+    background: transparent;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 22px;
+    border: none;
+    border-bottom-right-radius: 10px;
+    background: transparent;
+}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover,
+QDoubleSpinBox::down-button:hover {
+    background: #e8eef6;
+}
+
+/* 用 CSS 三角形重新绘制上下箭头，替代被 QSS 关掉的原生箭头 */
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #5b6f86;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #5b6f86;
+}
+
+QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off,
+QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off {
+    border-bottom-color: #c6ced8;
+}
+
+QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off,
+QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off {
+    border-top-color: #c6ced8;
 }
 
 QLineEdit:focus,
@@ -4706,7 +4777,7 @@ void MainWindow::on_pushButton_OperatingModeSelect_clicked()
 }
 
 
-void MainWindow::on_pushButton_InternalPatternControl_clicked()
+void MainWindow::on_pushButton_ProjectOnce_clicked()
 {
     if(!dlpInitialized || !dlpWorker)
     {
@@ -4716,17 +4787,46 @@ void MainWindow::on_pushButton_InternalPatternControl_clicked()
         return;
     }
 
-    // 异步投递任务到工作线程
+    // 投影一次：worker 内部切到内部图案模式并以 times=1 发 PC_START，播放一遍即停。
     QMetaObject::invokeMethod(dlpWorker,
-                              "internalPatternControl",
+                              "startInternalPatternProjection",
                               Qt::QueuedConnection,
-                              Q_ARG(QString, ui->comboBox_DLP_InternalPatternControl->currentText()),
-                              Q_ARG(int, ui->spinBox_partten_times->value()));
+                              Q_ARG(int, 1));
+}
 
-    // for (int i = 0; i < display_widget_list.size(); ++i)
-    // {
-    //     display_widget_list[i]->SaveContinuous(true);
-    // }
+
+void MainWindow::on_pushButton_ProjectContinuous_clicked()
+{
+    if(!dlpInitialized || !dlpWorker)
+    {
+        QMessageBox::warning(this,
+                             QStringLiteral("Warning"),
+                             QStringLiteral("Please connect DLP first"));
+        return;
+    }
+
+    // 持续投影：times=0，worker 内部按无限循环启动图案序列，直到点停止。
+    QMetaObject::invokeMethod(dlpWorker,
+                              "startInternalPatternProjection",
+                              Qt::QueuedConnection,
+                              Q_ARG(int, 0));
+}
+
+
+void MainWindow::on_pushButton_ProjectStop_clicked()
+{
+    if(!dlpInitialized || !dlpWorker)
+    {
+        QMessageBox::warning(this,
+                             QStringLiteral("Warning"),
+                             QStringLiteral("Please connect DLP first"));
+        return;
+    }
+
+    // 停止投影：发 PC_STOP 结束当前图案序列。
+    QMetaObject::invokeMethod(dlpWorker,
+                              "stopInternalPatternProjection",
+                              Qt::QueuedConnection);
 }
 
 

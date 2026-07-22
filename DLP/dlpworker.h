@@ -38,6 +38,10 @@ public slots:
     // 以下槽函数均在 DLP 子线程中执行真实硬件控制。
     void selectOperatingMode(const QString& operatingModeName);
     void internalPatternControl(const QString& patternControlName, int times);
+    // 开始投影：先切到内部图案模式，再发 PC_START。times=1 只投一次，times<=0 持续循环投影。
+    void startInternalPatternProjection(int times);
+    // 停止投影：发 PC_STOP，结束当前图案序列。
+    void stopInternalPatternProjection();
     void displayGridLines();
     void setBrightness(int brightness);
     void input1DImageSet8bitV(const DlpImageSet& imageSets);
