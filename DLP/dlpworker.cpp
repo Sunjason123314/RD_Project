@@ -190,13 +190,31 @@ void DlpWorker::setBrightness(int brightness)
     emit brightnessChanged(static_cast<int>(m_dlp->BlueLedCurrent));
 }
 
-void DlpWorker::input1DImageSet8bitV(const DlpImageSet& imageSets)
+void DlpWorker::readCurrent()
+{
+    if(!ensureInitialized(tr("Read DLP current")))
+        return;
+
+    bool fromCache = false;
+    const int blue = static_cast<int>(m_dlp->ReadCurrentBlueCurrent(&fromCache));
+    const int maxBlue = static_cast<int>(m_dlp->MaxBlueLedCurrent);
+
+    emit currentRead(blue, maxBlue, fromCache);
+    emit logMessage(fromCache
+                        ? tr("DLP current (cached, read unavailable): %1 / %2").arg(blue).arg(maxBlue)
+                        : tr("DLP current (read from device): %1 / %2").arg(blue).arg(maxBlue));
+}
+
+void DlpWorker::input1DImageSet8bitV(const DlpImageSet& imageSets,
+                                     int illuminationTimeUs,
+                                     int preDarkTimeUs,
+                                     int postDarkTimeUs)
 {
     if(!ensureInitialized(tr("Program DLP 8bit pattern set")))
         return;
 
     // cv::Mat 是隐式共享对象，queued connection 会拷贝 Mat 头；该调用在 DLP 子线程中完成烧录流程。
-    if(!m_dlp->Input1DImageSet_8bit_V(imageSets))
+    if(!m_dlp->Input1DImageSet_8bit_V(imageSets, illuminationTimeUs, preDarkTimeUs, postDarkTimeUs))
     {
         emit operationFailed(tr("Program DLP 8bit pattern set"),
                              tr("DLP command write failed. Please check projector connection and image set."));

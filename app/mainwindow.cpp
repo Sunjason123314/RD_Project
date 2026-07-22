@@ -285,6 +285,17 @@ void MainWindow::initDlpThread()
                 ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent));
             }, Qt::QueuedConnection);
 
+    connect(dlpWorker, &DlpWorker::currentRead,
+            this, [this](int blueLedCurrent, int maxBlueLedCurrent, bool fromCache) {
+                QSignalBlocker blockerSlider(ui->horizontalSlider);
+                ui->horizontalSlider->setValue(blueLedCurrent);
+                // 显示 当前值/上限，读失败时标注为缓存值，提示这是软件记录而非硬件真读。
+                const QString suffix = fromCache ? QStringLiteral(" (cached)") : QString();
+                ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent)
+                                           + QStringLiteral(" / ") + QString::number(maxBlueLedCurrent)
+                                           + suffix);
+            }, Qt::QueuedConnection);
+
     connect(dlpWorker, &DlpWorker::logMessage,
             this, [this](const QString& message) {
                 ui->plainTextEdit->appendPlainText(systemTime() + " " + message);
@@ -4868,6 +4879,26 @@ void MainWindow::on_pushButton_ProjectStop_clicked()
 }
 
 
+void MainWindow::registerCameraWindowCleanup(CamDisplay *window)
+{
+    if(!window)
+        return;
+
+    // 用属性标记避免对同一窗口重复连接（每次打开相机都会遍历整张列表）。
+    if(window->property("cleanupRegistered").toBool())
+        return;
+    window->setProperty("cleanupRegistered", true);
+
+    // destroyed 在对象析构时发出；此时不能再调用 CamDisplay 成员，只按裸指针从列表移除。
+    connect(window, &QObject::destroyed, this, [this](QObject *obj) {
+        auto *cam = static_cast<CamDisplay *>(obj);
+        auto &list = display_widget_list;
+        list.erase(std::remove(list.begin(), list.end(), cam), list.end());
+        if(display_widget == cam)
+            display_widget = nullptr;
+    });
+}
+
 void MainWindow::on_pushButton_testui_clicked()
 {
     if (ui->checkBox_open_all->isChecked())
@@ -4906,7 +4937,13 @@ void MainWindow::on_pushButton_testui_clicked()
             );
 
         display_widget->show();
+        // 单个打开的相机窗口同样纳入列表，否则“全部勾选/同时采集/同时存图”等批量操作会遗漏它。
+        display_widget_list.push_back(display_widget);
     }
+
+    // 窗口设置了 WA_DeleteOnClose，关闭即销毁；销毁时把它从列表移除，避免留下野指针。
+    for (CamDisplay *w : display_widget_list)
+        registerCameraWindowCleanup(w);
 
     ui->mdiArea->tileSubWindows();
 }
@@ -4954,6 +4991,61 @@ void MainWindow::on_pushButton_saveonce_all_clicked()
     {
         display_widget_list[i]->SaveOnce();
     }
+}
+
+
+void MainWindow::on_pushButton_checkall_countsave_clicked()
+{
+    if(display_widget_list.empty())
+        return;
+
+    // 切换逻辑：只要有一个窗口未勾选，就全部勾上；若当前已全部勾选，则全部取消。
+    // 这样无论之前是手动勾的还是按钮勾的，都能正确判断并反向操作。
+    bool allChecked = true;
+    for (int i = 0; i < display_widget_list.size(); ++i)
+    {
+        if(!display_widget_list[i]->isCountSaveChecked())
+        {
+            allChecked = false;
+            break;
+        }
+    }
+
+    const bool target = !allChecked;
+    for (int i = 0; i < display_widget_list.size(); ++i)
+    {
+        display_widget_list[i]->setCountSaveChecked(target);
+    }
+
+    ui->pushButton_checkall_countsave->setText(target ? QStringLiteral("取消全部勾选")
+                                                      : QStringLiteral("全部勾选计数"));
+}
+
+
+void MainWindow::on_pushButton_checkall_save_clicked()
+{
+    if(display_widget_list.empty())
+        return;
+
+    // 切换逻辑：同上，全部已勾则取消，否则全部勾选。
+    bool allChecked = true;
+    for (int i = 0; i < display_widget_list.size(); ++i)
+    {
+        if(!display_widget_list[i]->isSaveChecked())
+        {
+            allChecked = false;
+            break;
+        }
+    }
+
+    const bool target = !allChecked;
+    for (int i = 0; i < display_widget_list.size(); ++i)
+    {
+        display_widget_list[i]->setSaveChecked(target);
+    }
+
+    ui->pushButton_checkall_save->setText(target ? QStringLiteral("取消全部勾选")
+                                                 : QStringLiteral("全部勾选存图"));
 }
 
 
@@ -5100,11 +5192,19 @@ void MainWindow::on_pushButton_testpartteb_clicked()
         return;
     }
 
+    // 从界面读取每张图案的明亮/前黑暗/后黑暗时间(微秒)，随烧录任务一起下发。
+    const int illuminationTimeUs = ui->spinBox_illum_time->value();
+    const int preDarkTimeUs      = ui->spinBox_predark_time->value();
+    const int postDarkTimeUs     = ui->spinBox_postdark_time->value();
+
     // 异步投递任务到工作线程
     QMetaObject::invokeMethod(dlpWorker,
                               "input1DImageSet8bitV",
                               Qt::QueuedConnection,
-                              Q_ARG(DlpImageSet, sets));
+                              Q_ARG(DlpImageSet, sets),
+                              Q_ARG(int, illuminationTimeUs),
+                              Q_ARG(int, preDarkTimeUs),
+                              Q_ARG(int, postDarkTimeUs));
 }
 
 
@@ -5459,6 +5559,23 @@ void MainWindow::on_horizontalSlider_sliderReleased()
                               "setBrightness",
                               Qt::QueuedConnection,
                               Q_ARG(int, brightness));
+}
+
+
+void MainWindow::on_pushButton_readCurrent_clicked()
+{
+    if(!dlpInitialized || !dlpWorker)
+    {
+        QMessageBox::warning(this,
+                             QStringLiteral("Warning"),
+                             QStringLiteral("Please connect DLP first"));
+        return;
+    }
+
+    // 读取当前电流：结果通过 currentRead 信号异步回传，刷新 label_current 显示。
+    QMetaObject::invokeMethod(dlpWorker,
+                              "readCurrent",
+                              Qt::QueuedConnection);
 }
 
 

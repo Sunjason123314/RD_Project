@@ -94,10 +94,20 @@ public:
     uint16_t RedLedCurrent,GreenLedCurrent,BlueLedCurrent;
     bool SetBrightness(double brightness);
 
+    // 读取当前蓝光电流强度。优先真读硬件；本板卡读命令可能持续 NAK，读失败时回退到
+    // 上次写入的缓存值(BlueLedCurrent)。outFromCache 返回该值是否来自缓存(true=缓存)。
+    // 返回值恒为可用的电流值，供 UI 显示。
+    uint16_t ReadCurrentBlueCurrent(bool* outFromCache = nullptr);
+
 
     //图像处理相关
 
-    bool Input1DImageSet_8bit_V(vector<vector<cv::Mat>> imagesets);
+    // illuminationTimeUs/preDarkTimeUs/postDarkTimeUs 为每张图案的明亮时间、前黑暗时间、后黑暗时间(微秒)。
+    // 传 0 或负数时沿用默认 40000us，保持与旧行为兼容。
+    bool Input1DImageSet_8bit_V(vector<vector<cv::Mat>> imagesets,
+                                int illuminationTimeUs = 40000,
+                                int preDarkTimeUs = 40000,
+                                int postDarkTimeUs = 40000);
 
 private:
     bool device_on=false;

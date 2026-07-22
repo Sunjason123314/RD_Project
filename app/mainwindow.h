@@ -196,11 +196,14 @@ private slots:
     void on_pushButton_refresh_device_clicked();
     void on_pushButton_snapall_clicked();
     void on_pushButton_saveonce_all_clicked();
+    void on_pushButton_checkall_countsave_clicked();
+    void on_pushButton_checkall_save_clicked();
     void on_pushButton_testpartteb_clicked();
     void on_SelectPatternroot_clicked();
     void on_groupnumber_confirm_clicked();
     void on_picturenumber_confirm_clicked();
     void on_horizontalSlider_sliderReleased();
+    void on_pushButton_readCurrent_clicked();
     void on_saverootpath_confirm_clicked();
     void on_select_subpath_clicked();
     void on_Calculate_SL_clicked();
@@ -471,6 +474,8 @@ private:
     void initial_UI();
     // 将主 Tab 与信息输出框放入可拖动的上下 QSplitter，分隔条可调整二者高度。
     void setupCentralSplitter();
+    // 相机窗口关闭销毁时从 display_widget_list 移除，避免野指针；幂等，重复调用安全。
+    void registerCameraWindowCleanup(CamDisplay *window);
     void setupPointCloudWorkspaceUi();
     void stylePointCloudWorkspace();
     void refreshPointCloudWorkspaceState();

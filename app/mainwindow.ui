@@ -3828,6 +3828,13 @@ QPushButton::disabled{
               </property>
              </widget>
             </item>
+            <item row="8" column="0">
+             <widget class="QPushButton" name="pushButton_readCurrent">
+              <property name="text">
+               <string>读取当前电流</string>
+              </property>
+             </widget>
+            </item>
             <item row="3" column="0">
              <layout class="QGridLayout" name="gridLayout_20" columnstretch="1,3,1">
               <property name="bottomMargin">
@@ -3874,7 +3881,7 @@ QPushButton::disabled{
               <item row="2" column="0">
                <widget class="QSpinBox" name="picturenumber">
                 <property name="value">
-                 <number>12</number>
+                 <number>6</number>
                 </property>
                </widget>
               </item>
@@ -3915,7 +3922,7 @@ QPushButton::disabled{
               <item row="1" column="0">
                <widget class="QSpinBox" name="groupnumber">
                 <property name="value">
-                 <number>3</number>
+                 <number>6</number>
                 </property>
                </widget>
               </item>
@@ -3933,45 +3940,132 @@ QPushButton::disabled{
                 </property>
                </widget>
               </item>
+              <item row="3" column="0" colspan="2">
+               <layout class="QGridLayout" name="gridLayout_dlp_times">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="label_illum_time">
+                  <property name="text">
+                   <string>明亮时间(us)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QSpinBox" name="spinBox_illum_time">
+                  <property name="minimum">
+                   <number>100</number>
+                  </property>
+                  <property name="maximum">
+                   <number>2000000</number>
+                  </property>
+                  <property name="singleStep">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>20000</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="label_predark_time">
+                  <property name="text">
+                   <string>前黑暗时间(us)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QSpinBox" name="spinBox_predark_time">
+                  <property name="minimum">
+                   <number>0</number>
+                  </property>
+                  <property name="maximum">
+                   <number>2000000</number>
+                  </property>
+                  <property name="singleStep">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>40000</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="label_postdark_time">
+                  <property name="text">
+                   <string>后黑暗时间(us)</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QSpinBox" name="spinBox_postdark_time">
+                  <property name="minimum">
+                   <number>0</number>
+                  </property>
+                  <property name="maximum">
+                   <number>2000000</number>
+                  </property>
+                  <property name="singleStep">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>20000</number>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
              </layout>
             </item>
             <item row="0" column="0">
              <layout class="QGridLayout" name="gridLayout_19">
-              <item row="0" column="2">
-               <widget class="QComboBox" name="comboBox_device_list"/>
-              </item>
-              <item row="2" column="2">
-               <widget class="QPushButton" name="pushButton_saveonce_all">
-                <property name="text">
-                 <string>同时存图</string>
-                </property>
-               </widget>
-              </item>
-              <item row="0" column="1">
+              <item row="1" column="1">
                <widget class="QPushButton" name="pushButton_refresh_device">
                 <property name="text">
                  <string>刷新</string>
                 </property>
                </widget>
               </item>
-              <item row="2" column="1">
-               <widget class="QPushButton" name="pushButton_snapall">
-                <property name="text">
-                 <string>同时采集</string>
-                </property>
-               </widget>
-              </item>
               <item row="1" column="2">
+               <widget class="QComboBox" name="comboBox_device_list"/>
+              </item>
+              <item row="2" column="2">
                <widget class="QPushButton" name="pushButton_testui">
                 <property name="text">
                  <string>打开相机</string>
                 </property>
                </widget>
               </item>
-              <item row="1" column="1">
+              <item row="3" column="1">
+               <widget class="QPushButton" name="pushButton_snapall">
+                <property name="text">
+                 <string>同时采集</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="2">
+               <widget class="QPushButton" name="pushButton_saveonce_all">
+                <property name="text">
+                 <string>同时存图</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="1">
                <widget class="QCheckBox" name="checkBox_open_all">
                 <property name="text">
                  <string>open all</string>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="1">
+               <widget class="QPushButton" name="pushButton_checkall_countsave">
+                <property name="text">
+                 <string>全部勾选计数</string>
+                </property>
+               </widget>
+              </item>
+              <item row="4" column="2">
+               <widget class="QPushButton" name="pushButton_checkall_save">
+                <property name="text">
+                 <string>全部勾选存图</string>
                 </property>
                </widget>
               </item>

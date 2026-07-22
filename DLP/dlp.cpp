@@ -81,9 +81,16 @@ void LogShortStatus(const DLPC347X_ShortStatus_s& status)
 
 bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
 {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + std::chrono::seconds(timeoutSeconds);
+    // 本项目板卡的 I2C 读命令(read data phase)会持续 NAK，无法读回 ShortStatus，
+    // 但写命令(含 WriteFlashErase)正常。擦除 entire sens pattern 区域是写命令触发的
+    // 异步操作，通常数秒内完成。因此当读状态始终不可用时，盲等固定时长后即视为擦除
+    // 完成并继续烧录，避免因读不回状态而死等超时、进而让投影仪长时间无响应。
+    const auto blindWaitDuration = std::chrono::seconds(6);
     DLPC347X_ShortStatus_s shortStatus = {};
     uint32_t readRetryCount = 0;
+    bool anyReadSucceeded = false;
 
     do
     {
@@ -94,7 +101,17 @@ bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
             cerr << "DLPC347X_ReadShortStatus failed while waiting for flash erase, status="
                  << status << ", retry=" << readRetryCount << endl;
 
-            if(std::chrono::steady_clock::now() >= deadline)
+            const auto now = std::chrono::steady_clock::now();
+
+            // 读状态从未成功过(板卡不支持稳定读回)且已盲等足够久：判定擦除已完成。
+            if(!anyReadSucceeded && (now - start) >= blindWaitDuration)
+            {
+                cerr << "Short-status read unavailable on this board; "
+                        "assuming flash erase completed after blind wait." << endl;
+                return true;
+            }
+
+            if(now >= deadline)
             {
                 cerr << "Timed out waiting for DLP flash erase status to become readable." << endl;
                 return false;
@@ -105,6 +122,7 @@ bool WaitForFlashEraseComplete(uint32_t timeoutSeconds)
             continue;
         }
 
+        anyReadSucceeded = true;
         readRetryCount = 0;
         LogShortStatus(shortStatus);
 
@@ -814,10 +832,49 @@ bool DLP::SetBrightness(double brightness)
     return true;
 }
 
-bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets)
+uint16_t DLP::ReadCurrentBlueCurrent(bool* outFromCache)
+{
+    // 先尝试真读硬件电流。本板卡读命令可能 NAK，带重试。
+    uint16_t r = 0, g = 0, b = 0;
+    const bool readOk = device_on &&
+        ExecuteDlpcCommandWithRetry([&]() {
+                                        return DLPC347X_ReadRgbLedCurrent(&r, &g, &b);
+                                    },
+                                    "DLPC347X_ReadRgbLedCurrent",
+                                    DLPC_STATUS_READ_RETRY_COUNT,
+                                    DLPC_STATUS_READ_RETRY_DELAY_MS);
+
+    if(readOk)
+    {
+        // 真读成功：更新缓存并返回真值。
+        RedLedCurrent = r;
+        GreenLedCurrent = g;
+        BlueLedCurrent = b;
+        if(outFromCache)
+            *outFromCache = false;
+        return BlueLedCurrent;
+    }
+
+    // 读失败：回退到上次写入的缓存值。
+    cerr << "ReadRgbLedCurrent unavailable on this board; returning cached blue current="
+         << BlueLedCurrent << endl;
+    if(outFromCache)
+        *outFromCache = true;
+    return BlueLedCurrent;
+}
+
+bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets,
+                                 int illuminationTimeUs,
+                                 int preDarkTimeUs,
+                                 int postDarkTimeUs)
 {
     if(!IsDeviceReady(device_on, "Input1DImageSet_8bit_V"))
         return false;
+
+    // 传入非正数时回退到默认 40000us，避免出现 0 明亮时间等非法配置。
+    const uint32_t illumTime = illuminationTimeUs > 0 ? static_cast<uint32_t>(illuminationTimeUs) : 40000u;
+    const uint32_t preDark   = preDarkTimeUs   >= 0 ? static_cast<uint32_t>(preDarkTimeUs)   : 40000u;
+    const uint32_t postDark  = postDarkTimeUs  >= 0 ? static_cast<uint32_t>(postDarkTimeUs)  : 40000u;
 
 //    WriteLookSelect(0);
     int total_size=0;
@@ -884,9 +941,9 @@ bool DLP::Input1DImageSet_8bit_V(vector<vector<cv::Mat> > imagesets)
         PatternOrderTable[i].NumDisplayPatterns = PatternSets[i].PatternCount;
         PatternOrderTable[i].IlluminationSelect = DLPC347X_INT_PAT_ILLUMINATION_BLUE ;
         PatternOrderTable[i].InvertPatterns = false;
-        PatternOrderTable[i].IlluminationTimeInMicroseconds = 40000;
-        PatternOrderTable[i].PreIlluminationDarkTimeInMicroseconds  = 40000;
-        PatternOrderTable[i].PostIlluminationDarkTimeInMicroseconds = 40000;
+        PatternOrderTable[i].IlluminationTimeInMicroseconds = illumTime;
+        PatternOrderTable[i].PreIlluminationDarkTimeInMicroseconds  = preDark;
+        PatternOrderTable[i].PostIlluminationDarkTimeInMicroseconds = postDark;
     }
 
     if(!IsDlpcCommandSuccessful(DLPC347X_WriteInternalPatternControl(DLPC347X_PC_STOP, 0),

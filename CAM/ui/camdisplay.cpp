@@ -258,6 +258,28 @@ void CamDisplay::SaveContinuous(bool checkstate)
     ui->checkBox->setChecked(checkstate);
 }
 
+void CamDisplay::setCountSaveChecked(bool checked)
+{
+    // setChecked 会触发 on_checkBox_countsave_stateChanged，自动把状态下发到相机 worker。
+    ui->checkBox_countsave->setChecked(checked);
+}
+
+void CamDisplay::setSaveChecked(bool checked)
+{
+    // setChecked 会触发 on_checkBox_stateChanged，自动把状态下发到相机 worker。
+    ui->checkBox->setChecked(checked);
+}
+
+bool CamDisplay::isCountSaveChecked() const
+{
+    return ui->checkBox_countsave->isChecked();
+}
+
+bool CamDisplay::isSaveChecked() const
+{
+    return ui->checkBox->isChecked();
+}
+
 string CamDisplay::get_saveoncename()
 {
     return m_state.savePath.toStdString();
