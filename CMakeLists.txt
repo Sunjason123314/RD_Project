@@ -68,6 +68,7 @@ set(SOURCES
     PLC/plcconnect.cpp
     CF_sensor/logindialog.cpp
     CF_sensor/qcustomplot.cpp
+    CF_sensor/confocalsettingsdialog.cpp
     ui/morecolordialog.cpp
 )
 
@@ -82,6 +83,7 @@ set(HEADERS
     # Pushcontrollerfinal.h
     PLC/plcconnect.h
     CF_sensor/logindialog.h
+    CF_sensor/confocalsettingsdialog.h
     CF_sensor/shareResource.h
     CF_sensor/qcustomplot.h
     CF_sensor/CFxxxx_Lib/src_inc/CF_ParameterDefine.h
@@ -96,6 +98,7 @@ set(UIS
     app/mainwindow.ui
     PLC/plcconnect.ui
     CF_sensor/logindialog.ui
+    CF_sensor/confocalsettingsdialog.ui
     ui/morecolordialog.ui
     Select_UI/stltopcd_dialog.ui
     Select_UI/reconst_surface_dialog.ui

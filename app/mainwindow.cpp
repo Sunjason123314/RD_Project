@@ -92,6 +92,11 @@ MainWindow::MainWindow(QWidget *parent)
     // , m_hardwaredataprovider(new  plcController,HardwareDataProvider(this))
 {
     ui->setupUi(this);
+
+    // 启动时即把光谱共焦的 5 个设置分页移入独立对话框，使主界面 tabWidget_tri
+    // 一开始就只保留其余分页（对话框此时不显示，点菜单 actionCF_Sensor 才弹出）。
+    initConfocalSettingsDialog();
+
     if(ui->RT_Matrix)
         ui->RT_Matrix->setEnabled(false);  // disabled until coarse registration succeeds
     if(ui->axisrotate)
@@ -3224,6 +3229,47 @@ void MainWindow::on_actionPlcCConect_triggered()
     dlg->show();
     dlg->raise();
     dlg->activateWindow();
+}
+
+// 构造对话框并把 CF 的 5 个设置分页从主界面 tabWidget_tri 移入对话框。
+// 在启动时（构造函数中）调用，使主界面 tabWidget_tri 一开始就只保留其余分页。
+// 采用 reparent 方案：这 5 页仍定义在 mainwindow.ui，QTabWidget::addTab 只改变父子
+// 关系，控件对象仍是 MainWindow 的成员，ui->xxx 引用与 on_xxx_ 自动槽全部不受影响。
+void MainWindow::initConfocalSettingsDialog()
+{
+    if (confocalSettingsDialog)
+        return;
+
+    confocalSettingsDialog = new ConfocalSettingsDialog(this);
+    // 非模态：不抢占焦点，可与主窗口同时操作，便于"应用"边调试边看主界面。
+    confocalSettingsDialog->setWindowModality(Qt::NonModal);
+
+    // 确认/应用时写入设置（当前为占位，后续接入实际写入逻辑）。
+    connect(confocalSettingsDialog, &ConfocalSettingsDialog::settingsApplyRequested,
+            this, [this]() {
+                // TODO: 在此写入光谱共焦传感器设置（下发 confocalWorker 或存配置）。
+            });
+
+    QTabWidget *dst = confocalSettingsDialog->contentTabWidget();
+    struct { QWidget *page; const char *title; } cfPages[] = {
+        { ui->tabSingleChannelMode,   u8"单通道" },
+        { ui->tabCommunicationMode,   u8"通讯" },
+        { ui->tabLightSourceMode,     u8"光源" },
+        { ui->tabImportMode,          u8"输入" },
+        { ui->tabSignalAndFilterMode, u8"信号饱和度" },
+    };
+    for (const auto &p : cfPages) {
+        dst->addTab(p.page, QString::fromUtf8(p.title));
+    }
+}
+
+// 光谱共焦传感器设置：点击菜单 actionCF_Sensor 弹出已建好的设置对话框。
+void MainWindow::on_actionCF_Sensor_triggered()
+{
+    initConfocalSettingsDialog();  // 兜底：若启动时未初始化则此处补建。
+    confocalSettingsDialog->show();
+    confocalSettingsDialog->raise();
+    confocalSettingsDialog->activateWindow();
 }
 
 
@@ -10214,11 +10260,6 @@ void MainWindow::updatePolarChart(const QVector<double> &cgq33, const QVector<do
 void MainWindow::mahrSensorpx()
 {
     updatePolarChart(cgq2, jiaodu2);
-}
-
-void MainWindow::on_actionFigure_triggered()
-{
-
 }
 
 

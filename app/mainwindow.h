@@ -7,6 +7,7 @@
 
 #include "include.h"
 #include "CF_sensor/confocalsensorworker.h"
+#include "CF_sensor/confocalsettingsdialog.h"
 #include "DLP/dlpworker.h"
 #include "thread/threadmanager.h"
 #include "pointcloud/pointcloudworker.h"
@@ -286,7 +287,6 @@ private slots:
     void on_emergency_stop_clicked();
     void on_Daogui_Y_2_clicked();
     void on_Daogui_Z_2_clicked();
-    void on_actionFigure_triggered();
 
     // ==================== 手动点动面板与按钮按压释放事件 ====================
     void on_btnShowJogPanel_clicked();
@@ -318,6 +318,7 @@ private slots:
 
     // ==================== PLC 连接与界面语言切换 ====================
     void on_actionPlcCConect_triggered();
+    void on_actionCF_Sensor_triggered();
     void on_ChineseEnglishSwitch_clicked();
 
     // ==================== 点云标签栏交互 ====================
@@ -511,6 +512,10 @@ private:
 
     // 光谱共焦传感器后台 worker；GUI 线程只保存指针用于 invokeMethod 投递 SDK 操作。
     ConfocalSensorWorker* confocalWorker = nullptr;
+
+    // 光谱共焦传感器设置对话框（持久成员，非 WA_DeleteOnClose）。
+    // CF 设置分页在首次打开时从 tabWidget_tri 移入其内部 QTabWidget，之后常驻。
+    ConfocalSettingsDialog* confocalSettingsDialog = nullptr;
  
     // PLC 控制对象已交给 ThreadManager 移入 PLC 子线程；主线程只保存指针用于投递 queued 调用。
     Plc *plcController = nullptr;
@@ -693,6 +698,9 @@ private:
 
     // 接收子线程读取到的初始化参数快照，并在 GUI 线程刷新控件。
     void applyConfocalInitialConfig(const ConfocalInitialConfig& config);
+
+    // 构造光谱共焦设置对话框并把 5 个 CF 分页从 tabWidget_tri 移入（启动时调用）。
+    void initConfocalSettingsDialog();
 
     // 接收子线程读取到的 SDK/控制器/传感器状态快照，并刷新状态栏缓存。
     void updateConfocalStatusSnapshot(const ConfocalStatusSnapshot& snapshot);
