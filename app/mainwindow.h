@@ -8,7 +8,7 @@
 #include "include.h"
 #include "CF_sensor/confocalsensorworker.h"
 #include "CF_sensor/confocalsettingsdialog.h"
-#include "DLP/dlpworker.h"
+#include "DLP/dlp.h"
 #include "thread/threadmanager.h"
 #include "pointcloud/pointcloudworker.h"
 #include "pointcloud/Point_Algorithm.h"
@@ -528,8 +528,8 @@ private:
     // PLC 控制对象已交给 ThreadManager 移入 PLC 子线程；主线程只保存指针用于投递 queued 调用。
     Plc *plcController = nullptr;
 
-    // DLP 投影仪后台 worker；GUI 线程只保存指针用于投递 queued 调用，真实 DLP 对象在子线程创建。
-    DlpWorker *dlpWorker = nullptr;
+    // DLP 投影仪对象；直接在主线程创建并同步调用（对齐 qt_camera，避免与相机 USB 操作跨线程冲突导致 I2C NAK）。
+    DLP *dlp1 = nullptr;
 
     // 点云文件加载后台 worker；OpenGL 显示控件留在 GUI 线程，文件读取和数据准备放入 PointCloudDisplayThread。
     PointCloudWorker *pointCloudWorker = nullptr;
@@ -595,7 +595,6 @@ private:
     void __InitUI();
     CamDisplay *display_widget = nullptr;
     std::vector<CamDisplay *> display_widget_list;
-    int nextCameraInstanceId = 1; ///< 相机线程实例递增编号，保证多个 CamDisplay 的 ThreadManager key 不冲突。
 
     struct FloatingTabPage
     {
@@ -668,12 +667,6 @@ private:
     void postPlcWriteHoldingRegisters(double registers, double address);
     void postPlcWriteCoilData(double value, double address);
 
-    // ==================== DLP 线程管理 ====================
-    // 初始化 DLP worker，并通过 ThreadManager 移入独立线程；真实硬件连接由按钮触发 initialize()。
-    void initDlpThread();
-
-    // 停止 DLP 线程；停止前会在 DLP 子线程调用 shutdown() 释放 I2C/硬件连接。
-    void shutdownDlpThread();
 
     // ==================== 点云线程管理 ====================
     // 初始化点云 worker，并通过 ThreadManager 移入独立线程执行文件读取和数据准备。

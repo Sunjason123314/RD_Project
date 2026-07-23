@@ -131,7 +131,7 @@ MainWindow::MainWindow(QWidget *parent)
     initThreadManager();
     initPlcThread();
     initConfocalSensorThread();
-    initDlpThread();
+    // DLP 不再预创建线程；改为点击“显示”按钮时在主线程直接 new DLP（对齐 qt_camera）。
     initPointCloudThread();
     initFloatingMainTabs();
   
@@ -240,103 +240,6 @@ void MainWindow::initThreadManager()
             }, Qt::QueuedConnection);
 }
 
-void MainWindow::initDlpThread()
-{
-    // 注册跨线程信号槽所需的元类型
-    qRegisterMetaType<DlpImageSet>("DlpImageSet");
-
-    if(!threadManager)
-        initThreadManager();
-
-    if(dlpWorker)
-        return;
-
-    // 创建工作线程对象
-    dlpWorker = new DlpWorker;
-
-    connect(dlpWorker, &DlpWorker::initialized,
-            this, [this](const QStringList& operatingModeNames,
-                         const QString& currentOperatingModeName,
-                         const QStringList& patternControlNames,
-                         int maxBlueLedCurrent,
-                         int blueLedCurrent) {
-                dlpInitialized = true;
-
-                QSignalBlocker blockerOperatingMode(ui->comboBox_DLP_OperatingModeSelect);
-                QSignalBlocker blockerSlider(ui->horizontalSlider);
-
-                ui->comboBox_DLP_OperatingModeSelect->clear();
-                ui->comboBox_DLP_OperatingModeSelect->addItems(operatingModeNames);
-                if(!currentOperatingModeName.isEmpty())
-                    ui->comboBox_DLP_OperatingModeSelect->setCurrentText(currentOperatingModeName);
-
-                // 图案控制已改为三个按钮(投影一次/持续投影/停止)，不再需要下拉框，patternControlNames 保留不用。
-                Q_UNUSED(patternControlNames);
-
-                ui->horizontalSlider->setMaximum(maxBlueLedCurrent);
-                ui->horizontalSlider->setValue(blueLedCurrent);
-                ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent));
-            }, Qt::QueuedConnection);
-
-    connect(dlpWorker, &DlpWorker::brightnessChanged,
-            this, [this](int blueLedCurrent) {
-                QSignalBlocker blockerSlider(ui->horizontalSlider);
-                ui->horizontalSlider->setValue(blueLedCurrent);
-                ui->label_current->setText(QStringLiteral("Current: ") + QString::number(blueLedCurrent));
-            }, Qt::QueuedConnection);
-
-    connect(dlpWorker, &DlpWorker::burnProgress,
-            this, [this](int percent, const QString& stage) {
-                if(percent < 0)
-                {
-                    // 烧录失败：隐藏进度条。
-                    ui->progressBar_burn->setVisible(false);
-                    return;
-                }
-                ui->progressBar_burn->setVisible(true);
-                ui->progressBar_burn->setValue(percent);
-                ui->progressBar_burn->setFormat(stage + QStringLiteral(" %p%"));
-                if(percent >= 100)
-                {
-                    // 完成后延时隐藏，让用户看到 100%。
-                    QTimer::singleShot(1500, this, [this]() {
-                        if(ui && ui->progressBar_burn)
-                            ui->progressBar_burn->setVisible(false);
-                    });
-                }
-            }, Qt::QueuedConnection);
-
-    connect(dlpWorker, &DlpWorker::logMessage,
-            this, [this](const QString& message) {
-                ui->plainTextEdit->appendPlainText(systemTime() + " " + message);
-            }, Qt::QueuedConnection);
-
-    connect(dlpWorker, &DlpWorker::operationFailed,
-            this, [this](const QString& operation, const QString& reason) {
-                QMessageBox::warning(this,
-                                     QStringLiteral("Warning"),
-                                     operation + QStringLiteral(": ") + reason);
-            }, Qt::QueuedConnection);
-
-    // 参数校验，无效时提前返回。
-    if(!threadManager->startModule(ThreadManager::Module::Dlp,
-                                   dlpWorker,
-                                   QStringLiteral("DlpThread"),
-                                   "shutdown"))
-    {
-        dlpWorker = nullptr;
-        dlpInitialized = false;
-    }
-}
-
-void MainWindow::shutdownDlpThread()
-{
-    if(threadManager)
-        threadManager->stopModule(ThreadManager::Module::Dlp, 3000);
-
-    dlpWorker = nullptr;
-    dlpInitialized = false;
-}
 
 void MainWindow::initPointCloudThread()
 {
@@ -2051,7 +1954,12 @@ void MainWindow::shutdownModuleThreads()
 
     confocalWorker = nullptr;
     plcController = nullptr;
-    dlpWorker = nullptr;
+    // DLP 直接在主线程创建，释放它（析构会断开 I2C/硬件连接）。
+    if(dlp1)
+    {
+        delete dlp1;
+        dlp1 = nullptr;
+    }
     pointCloudWorker = nullptr;
     plcConnectedFlag = false;
     dlpInitialized = false;
@@ -4800,27 +4708,61 @@ void MainWindow::on_spinBoxEncodeDivision_valueChanged(int arg1)
 
 void MainWindow::on_pushButton_display_clicked()
 {
-    if(!dlpWorker)
-        initDlpThread();
-
-    if(!dlpWorker)
+    // 直接在主线程创建 DLP（对齐 qt_camera），避免与相机 USB 操作跨线程冲突导致 I2C NAK。
+    if(dlp1)
     {
-        QMessageBox::warning(this,
-                             QStringLiteral("Warning"),
-                             QStringLiteral("DLP thread is not initialized"));
+        ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("DLP projector has already been initialized."));
         return;
     }
 
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(dlpWorker,
-                              "initialize",
-                              Qt::QueuedConnection);
+    try
+    {
+        dlp1 = new DLP;
+    }
+    catch(const std::exception& e)
+    {
+        dlp1 = nullptr;
+        dlpInitialized = false;
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Initialize DLP") + QStringLiteral(": ") + QString::fromLocal8Bit(e.what()));
+        return;
+    }
+    catch(...)
+    {
+        dlp1 = nullptr;
+        dlpInitialized = false;
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Initialize DLP") + QStringLiteral(": ") + tr("Unknown exception."));
+        return;
+    }
+
+    dlpInitialized = true;
+
+    QSignalBlocker blockerOperatingMode(ui->comboBox_DLP_OperatingModeSelect);
+    QSignalBlocker blockerSlider(ui->horizontalSlider);
+
+    ui->comboBox_DLP_OperatingModeSelect->clear();
+    QString currentOperatingModeName;
+    for(const auto& item : dlp1->OperatingModeList)
+    {
+        const QString name = QString::fromStdString(item.first);
+        ui->comboBox_DLP_OperatingModeSelect->addItem(name);
+        if(dlp1->Current_OperatingMode == item.second)
+            currentOperatingModeName = name;
+    }
+    if(!currentOperatingModeName.isEmpty())
+        ui->comboBox_DLP_OperatingModeSelect->setCurrentText(currentOperatingModeName);
+
+    ui->horizontalSlider->setMaximum(static_cast<int>(dlp1->MaxBlueLedCurrent));
+    ui->horizontalSlider->setValue(static_cast<int>(dlp1->BlueLedCurrent));
+    ui->label_current->setText(QStringLiteral("Current: ") + QString::number(static_cast<int>(dlp1->BlueLedCurrent)));
+    ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("DLP projector initialized."));
 }
 
 
 void MainWindow::on_pushButton_OperatingModeSelect_clicked()
 {
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -4828,17 +4770,28 @@ void MainWindow::on_pushButton_OperatingModeSelect_clicked()
         return;
     }
 
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(dlpWorker,
-                              "selectOperatingMode",
-                              Qt::QueuedConnection,
-                              Q_ARG(QString, ui->comboBox_DLP_OperatingModeSelect->currentText()));
+    const std::string key = ui->comboBox_DLP_OperatingModeSelect->currentText().toStdString();
+    const auto iter = dlp1->OperatingModeList.find(key);
+    if(iter == dlp1->OperatingModeList.end())
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Select DLP operating mode") + QStringLiteral(": ") +
+                             tr("Unknown operating mode: %1").arg(ui->comboBox_DLP_OperatingModeSelect->currentText()));
+        return;
+    }
+
+    if(!dlp1->SelectOperatingMode(iter->second))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Select DLP operating mode") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection."));
+    }
 }
 
 
 void MainWindow::on_pushButton_ProjectOnce_clicked()
 {
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -4846,17 +4799,26 @@ void MainWindow::on_pushButton_ProjectOnce_clicked()
         return;
     }
 
-    // 投影一次：worker 内部切到内部图案模式并以 times=1 发 PC_START，播放一遍即停。
-    QMetaObject::invokeMethod(dlpWorker,
-                              "startInternalPatternProjection",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, 1));
+    // 投影一次：先切到内部图案模式，再以 times=1 发 PC_START，播放一遍即停。
+    if(!dlp1->SelectOperatingMode(DLPC347X_OM_SENS_INTERNAL_PATTERN))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Start DLP projection") + QStringLiteral(": ") +
+                             tr("Failed to switch to internal pattern mode. Please check projector connection."));
+        return;
+    }
+    if(!dlp1->InternalPatternControl(DLPC347X_PC_START, 1))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Start DLP projection") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection."));
+    }
 }
 
 
 void MainWindow::on_pushButton_ProjectContinuous_clicked()
 {
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -4864,17 +4826,26 @@ void MainWindow::on_pushButton_ProjectContinuous_clicked()
         return;
     }
 
-    // 持续投影：times=0，worker 内部按无限循环启动图案序列，直到点停止。
-    QMetaObject::invokeMethod(dlpWorker,
-                              "startInternalPatternProjection",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, 0));
+    // 持续投影：times=0，底层按 0xFF(无限循环)处理，直到点停止。
+    if(!dlp1->SelectOperatingMode(DLPC347X_OM_SENS_INTERNAL_PATTERN))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Start DLP projection") + QStringLiteral(": ") +
+                             tr("Failed to switch to internal pattern mode. Please check projector connection."));
+        return;
+    }
+    if(!dlp1->InternalPatternControl(DLPC347X_PC_START, 0))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Start DLP projection") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection."));
+    }
 }
 
 
 void MainWindow::on_pushButton_ProjectStop_clicked()
 {
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -4883,9 +4854,12 @@ void MainWindow::on_pushButton_ProjectStop_clicked()
     }
 
     // 停止投影：发 PC_STOP 结束当前图案序列。
-    QMetaObject::invokeMethod(dlpWorker,
-                              "stopInternalPatternProjection",
-                              Qt::QueuedConnection);
+    if(!dlp1->InternalPatternControl(DLPC347X_PC_STOP, 0))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Stop DLP projection") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection."));
+    }
 }
 
 
@@ -4917,7 +4891,7 @@ void MainWindow::on_pushButton_testui_clicked()
 
         for (int i = 0; i < ui->comboBox_device_list->count(); ++i)
         {
-            display_widget = new CamDisplay(this, i, threadManager, nextCameraInstanceId++);
+            display_widget = new CamDisplay(this, i);
             display_widget->setAttribute(Qt::WA_DeleteOnClose);
             ui->mdiArea->addSubWindow(display_widget);
 
@@ -4934,9 +4908,7 @@ void MainWindow::on_pushButton_testui_clicked()
     else
     {
         display_widget = new CamDisplay(this,
-                                        ui->comboBox_device_list->currentIndex(),
-                                        threadManager,
-                                        nextCameraInstanceId++);
+                                        ui->comboBox_device_list->currentIndex());
         display_widget->setAttribute(Qt::WA_DeleteOnClose);
         ui->mdiArea->addSubWindow(display_widget);
 
@@ -5194,7 +5166,7 @@ void MainWindow::on_pushButton_testpartteb_clicked()
         sets.push_back(set);
     }
 
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -5207,14 +5179,41 @@ void MainWindow::on_pushButton_testpartteb_clicked()
     const int preDarkTimeUs      = ui->spinBox_predark_time->value();
     const int postDarkTimeUs     = ui->spinBox_postdark_time->value();
 
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(dlpWorker,
-                              "input1DImageSet8bitV",
-                              Qt::QueuedConnection,
-                              Q_ARG(DlpImageSet, sets),
-                              Q_ARG(int, illuminationTimeUs),
-                              Q_ARG(int, preDarkTimeUs),
-                              Q_ARG(int, postDarkTimeUs));
+    // 烧录进度回调：在主线程内同步触发，直接刷新进度条 + processEvents 强制重绘。
+    dlp1->SetProgressCallback([this](int percent, const std::string& stage) {
+        if(percent < 0)
+        {
+            ui->progressBar_burn->setVisible(false);
+        }
+        else
+        {
+            ui->progressBar_burn->setVisible(true);
+            ui->progressBar_burn->setValue(percent);
+            ui->progressBar_burn->setFormat(QString::fromStdString(stage) + QStringLiteral(" %p%"));
+        }
+        QApplication::processEvents();
+    });
+
+    // 主线程直接同步烧录（会阻塞界面，属已知可接受代价）。
+    const bool ok = dlp1->Input1DImageSet_8bit_V(sets, illuminationTimeUs, preDarkTimeUs, postDarkTimeUs);
+
+    dlp1->SetProgressCallback(nullptr);
+
+    if(!ok)
+    {
+        ui->progressBar_burn->setVisible(false);
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Program DLP 8bit pattern set") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection and image set."));
+        return;
+    }
+
+    // 完成后延时隐藏，让用户看到 100%。
+    QTimer::singleShot(1500, this, [this]() {
+        if(ui && ui->progressBar_burn)
+            ui->progressBar_burn->setVisible(false);
+    });
+    ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("DLP 8bit pattern set programming finished."));
 }
 
 
@@ -5553,7 +5552,7 @@ void MainWindow::on_picturenumber_confirm_clicked()
 
 void MainWindow::on_horizontalSlider_sliderReleased()
 {
-    if(!dlpInitialized || !dlpWorker)
+    if(!dlp1)
     {
         QMessageBox::warning(this,
                              QStringLiteral("Warning"),
@@ -5562,13 +5561,19 @@ void MainWindow::on_horizontalSlider_sliderReleased()
     }
 
     const int brightness = ui->horizontalSlider->value();
-    ui->label_current->setText(QStringLiteral("Current: ") + QString::number(brightness));
 
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(dlpWorker,
-                              "setBrightness",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, brightness));
+    if(!dlp1->SetBrightness(brightness))
+    {
+        QMessageBox::warning(this, QStringLiteral("Warning"),
+                             tr("Set DLP brightness") + QStringLiteral(": ") +
+                             tr("DLP command write failed. Please check projector connection."));
+        return;
+    }
+
+    // 用硬件实际生效的电流值回填滑块和标签。
+    QSignalBlocker blockerSlider(ui->horizontalSlider);
+    ui->horizontalSlider->setValue(static_cast<int>(dlp1->BlueLedCurrent));
+    ui->label_current->setText(QStringLiteral("Current: ") + QString::number(static_cast<int>(dlp1->BlueLedCurrent)));
 }
 
 

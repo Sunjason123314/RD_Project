@@ -140,16 +140,12 @@ set(DLP_SOURCE
     DLP/samples/cypress_i2c.h
     DLP/samples/dlpc347x_samples.c
     DLP/samples/cypress_i2c.c
-    DLP/dlpworker.cpp
-    DLP/dlpworker.h
 )
 
 # CAM 相机模块文件
 set(CAM_SOURCE
     CAM/cam.h
     CAM/cam.cpp
-    CAM/camworker.h
-    CAM/camworker.cpp
     CAM/Common/GXBitmap.h
     CAM/Common/GXBitmap.cpp
     CAM/Common/threadpool.h
@@ -332,6 +328,9 @@ include_directories(${MATLAB_INCLUDE_DIR})
 
 # CAM 相机 SDK
 file(GLOB CAMERA_LIB "${CMAKE_CURRENT_SOURCE_DIR}/CAM/lib/x64/*.lib")
+# GXSmartPtr.h 内有 #pragma comment(lib, "GxIAPICPPEx.lib")，只给裸文件名，
+# 需把该目录加入链接器搜索路径，否则 LNK1104 找不到该库
+link_directories("${CMAKE_CURRENT_SOURCE_DIR}/CAM/lib/x64")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/CAM/inc")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/CAM/Common")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/CAM/ui")

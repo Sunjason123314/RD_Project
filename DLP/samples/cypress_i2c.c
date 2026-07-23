@@ -47,7 +47,7 @@
 #define START_I2C_TRANSACTION_GPIO 9
 #define I2C_CLOCK_FREQUENCY_HZ     100000
 #define DLP_I2C_SLAVE_ADDRESS      (0X36 >> 1)
-#define I2C_TIMEOUT_MILLISECONDS   1000
+#define I2C_TIMEOUT_MILLISECONDS   500
 
 static CY_HANDLE          s_Handle;
 static CY_I2C_DATA_CONFIG s_DataConfig;
@@ -105,15 +105,15 @@ bool CYPRESS_I2C_SetCyGpio(uint8_t GpioNum, uint8_t Value)
 
 bool CYPRESS_I2C_RequestI2CBusAccess()
 {
-    uint8_t Value      = 0;
-    clock_t StartTime = clock();
+    uint8_t Value     = 0;
+    time_t  StartTime = time(NULL);
 
     if (!CYPRESS_I2C_SetCyGpio(REQUEST_I2C_ACCESS_GPIO, 1))
     {
         return false;
     }
 
-    while ((((clock() - StartTime) * 1000) / CLOCKS_PER_SEC) < I2C_TIMEOUT_MILLISECONDS)
+    while ((time(NULL) - StartTime) < I2C_TIMEOUT_MILLISECONDS)
     {
         if (!CYPRESS_I2C_GetCyGpio(I2C_ACCESS_GRANTED_GPIO, &Value))
         {
@@ -134,7 +134,6 @@ bool CYPRESS_I2C_RequestI2CBusAccess()
         }
     }
 
-    CYPRESS_I2C_SetCyGpio(REQUEST_I2C_ACCESS_GPIO, 0);
     return false;
 }
 
@@ -160,9 +159,8 @@ bool CYPRESS_I2C_WriteI2C(uint32_t WriteDataLength, uint8_t* WriteData)
     if (Status != CY_SUCCESS)
     {
         CyI2cReset(s_Handle, true);
-        return false;
     }
-    
+
     return true;
 }
 
@@ -182,7 +180,6 @@ bool CYPRESS_I2C_ReadI2C(uint32_t ReadDataLength, uint8_t* ReadData)
     if (Status != CY_SUCCESS)
     {
         CyI2cReset(s_Handle, false);
-        return false;
     }
 
     return true;

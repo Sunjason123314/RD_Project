@@ -5,12 +5,9 @@
 #include <QFileDialog>
 #include <QGraphicsItem>
 #include <QMainWindow>
-#include <QPointer>
-#include <QThread>
 
-#include "CAM/camworker.h"
+#include "CAM/cam.h"
 #include "form_linepix_display.h"
-#include "thread/threadmanager.h"
 
 #include <iostream>
 
@@ -23,11 +20,9 @@ class CamDisplay : public QMainWindow
     Q_OBJECT
 
 public:
-    // threadManager �� MainWindow ���룬CamDisplay ������ Camera ���߳�ʵ������ֱ�� new/delete QThread��
+    // 直接在主线程创建并持有 CAM 对象（对齐 qt_camera），不再使用 CamWorker/ThreadManager。
     explicit CamDisplay(QWidget *parent = nullptr,
-                        int index = 0,
-                        ThreadManager *threadManager = nullptr,
-                        int instanceId = 0);
+                        int index = 0);
     ~CamDisplay();
 
 public:
@@ -90,28 +85,18 @@ protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
-    void initCameraThread();
-    void shutdownCameraThread();
     void disconnectBitmapSignal();
-    void applyCameraState(const CamDeviceState& state);
-    void refreshUiFromState(const CamDeviceState& state);
+    void refreshUiFromCamera();               ///< 直接从 camera 读取参数并刷新 UI 控件
     void warnCameraNotOpen();
     void warnCameraNotSnap();
 
     Ui::CamDisplay *ui = nullptr;
-    ThreadManager *m_threadManager = nullptr; ///< ?????????????? MainWindow ?????????????? QThread ??????
-    QPointer<CamWorker> m_cameraWorker;       ///< ???????????????? worker????? QPointer ????????????????
-    QPointer<CGXBitmap> m_bitmap;             ///< ???????????????????????????
+    CAM *camera = nullptr;                     ///< 直接持有的相机对象，主线程内同步调用
 
-    int camindex = 0;                         ///< ?��?��??��??????????
-    int m_instanceId = 0;                     ///< ThreadManager ?? Camera ????��????????
-    bool m_threadStarted = false;             ///< ?????? worker ?????????? ThreadManager ??????
-    bool m_cameraOpen = false;                ///< GUI ????????????????
-    bool m_cameraSnap = false;                ///< GUI ?????????????????
-    bool refresh = false;                     ///< ?????????????? currentIndexChanged ?????????
+    int camindex = 0;                          ///< 打开的设备编号
+    bool refresh = false;                      ///< UI 刷新期间屏蔽 currentIndexChanged 联动
 
-    CamDeviceState m_state;                   ///< GUI ???????????????????????
-    Form_linepix_display* LineDisplay = nullptr; ///< ????????????????????????
+    Form_linepix_display* LineDisplay = nullptr; ///< 行像素显示窗口
 };
 
 #endif // CAMDISPLAY_H

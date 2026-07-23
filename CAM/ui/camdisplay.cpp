@@ -2,157 +2,55 @@
 #include "ui_camdisplay.h"
 
 #include <QMessageBox>
-#include <QMetaObject>
 #include <QSignalBlocker>
 
 using namespace std;
 
-CamDisplay::CamDisplay(QWidget *parent, int index, ThreadManager *threadManager, int instanceId) :
+CamDisplay::CamDisplay(QWidget *parent, int index) :
     QMainWindow(parent),
     ui(new Ui::CamDisplay),
-    m_threadManager(threadManager),
-    camindex(index),
-    m_instanceId(instanceId == 0 ? index + 1 : instanceId)
+    camindex(index)
 {
     ui->setupUi(this);
 
-    // 只允许输入数字，防止明显非法参数进入相机 worker。
+    // 只允许输入数字，防止明显非法参数进入相机。
     ui->lineEdit_exposetime->setValidator(new QIntValidator(0, 9999, ui->lineEdit_exposetime));
     ui->lineEdit_framerate->setValidator(new QIntValidator(0, 9999, ui->lineEdit_framerate));
     ui->lineEdit_denoise->setValidator(new QIntValidator(0, 9999, ui->lineEdit_denoise));
 
-    initCameraThread();
+    // 直接在主线程创建相机对象（对齐 qt_camera，避免与投影仪 Cypress I2C 跨线程冲突）。
+    camera = new CAM;
 }
 
 CamDisplay::~CamDisplay()
 {
-    shutdownCameraThread();
-    delete ui;
-}
-
-void CamDisplay::initCameraThread()
-{
-    if(!m_threadManager)
-    {
-        QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("相机线程管理未初始化"));
-        return;
-    }
-
-    if(m_cameraWorker)
-        return;
-
-    qRegisterMetaType<CamDeviceState>("CamDeviceState");
-    qRegisterMetaType<CGXBitmap*>("CGXBitmap*");
-
-    // CamWorker 不能设置父对象，否则 QObject 有父对象时无法 moveToThread。
-    m_cameraWorker = new CamWorker;
-
-    connect(m_cameraWorker, &CamWorker::cameraOpened,
-            this, [this](const CamDeviceState& state) {
-                applyCameraState(state);
-                const QString defaultPath = QStringLiteral("C:/Users/10782/Desktop/calibrate/data/test_multifrequency_cuda%1").arg(camindex);
-                QMetaObject::invokeMethod(m_cameraWorker,
-                                          "setSavePath",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(QString, defaultPath));
-            }, Qt::QueuedConnection);
-
-    connect(m_cameraWorker, &CamWorker::cameraClosed,
-            this, [this]() {
-                disconnectBitmapSignal();
-                ui->openGLWidget->Clear();
-                m_cameraOpen = false;
-                m_cameraSnap = false;
-                m_state = CamDeviceState();
-                refreshUiFromState(m_state);
-            }, Qt::QueuedConnection);
-
-    connect(m_cameraWorker, &CamWorker::stateReady,
-            this, &CamDisplay::applyCameraState,
-            Qt::QueuedConnection);
-
-    connect(m_cameraWorker, &CamWorker::snapStateChanged,
-            this, [this](bool started) {
-                m_cameraSnap = started;
-            }, Qt::QueuedConnection);
-
-    connect(m_cameraWorker, &CamWorker::savePathChanged,
-            this, [this](const QString& path) {
-                m_state.savePath = path;
-                ui->label_savepath_display->setText(path);
-                ui->label_savepath_display->setWordWrap(true);
-            }, Qt::QueuedConnection);
-
-    connect(m_cameraWorker, &CamWorker::operationFailed,
-            this, [this](const QString& operation, const QString& reason) {
-                QMessageBox::warning(this,
-                                     QString::fromLocal8Bit("警告"),
-                                     operation + QStringLiteral(": ") + reason);
-            }, Qt::QueuedConnection);
-
-    // 相机模块由 ThreadManager 统一 moveToThread/停止/释放；实例编号保证多个相机窗口互不冲突。
-    m_threadStarted = m_threadManager->startModule(ThreadManager::Module::Camera,
-                                                   m_cameraWorker,
-                                                   QStringLiteral("CameraThread_%1").arg(m_instanceId),
-                                                   "shutdown",
-                                                   QThread::InheritPriority,
-                                                   m_instanceId);
-    if(!m_threadStarted)
-    {
-        m_cameraWorker = nullptr;
-    }
-}
-
-void CamDisplay::shutdownCameraThread()
-{
     disconnectBitmapSignal();
     if(ui && ui->openGLWidget)
         ui->openGLWidget->Clear();
-
-    if(m_threadManager && m_threadStarted)
-        m_threadManager->stopModule(ThreadManager::Module::Camera, 3000, m_instanceId);
-
-    m_cameraWorker = nullptr;
-    m_bitmap = nullptr;
-    m_threadStarted = false;
-    m_cameraOpen = false;
-    m_cameraSnap = false;
+    if(camera)
+    {
+        camera->Close_Cam();
+        delete camera;
+        camera = nullptr;
+    }
+    delete ui;
 }
 
 void CamDisplay::disconnectBitmapSignal()
 {
-    if(m_bitmap && ui && ui->openGLWidget)
-        disconnect(m_bitmap, &CGXBitmap::ShowCallback, ui->openGLWidget, &GL_Image::refresh);
+    if(camera && camera->m_pBitmap && ui && ui->openGLWidget)
+        disconnect(camera->m_pBitmap, &CGXBitmap::ShowCallback, ui->openGLWidget, &GL_Image::refresh);
 
-    if(m_bitmap && LineDisplay)
-        disconnect(m_bitmap, &CGXBitmap::ShowCallback, LineDisplay, &Form_linepix_display::picture_refreshed);
-
-    m_bitmap = nullptr;
+    if(camera && camera->m_pBitmap && LineDisplay)
+        disconnect(camera->m_pBitmap, &CGXBitmap::ShowCallback, LineDisplay, &Form_linepix_display::picture_refreshed);
 }
 
-void CamDisplay::applyCameraState(const CamDeviceState& state)
+// 直接从 camera 读取参数并刷新 UI 控件（对齐 qt_camera 的 __RefreshUi）。
+void CamDisplay::refreshUiFromCamera()
 {
-    m_state = state;
-    m_cameraOpen = state.isOpen;
-    m_cameraSnap = state.isSnap;
+    if(!camera)
+        return;
 
-    if(state.bitmap && state.bitmap != m_bitmap)
-    {
-        disconnectBitmapSignal();
-        m_bitmap = state.bitmap;
-        connect(m_bitmap, &CGXBitmap::ShowCallback,
-                ui->openGLWidget, &GL_Image::refresh,
-                Qt::QueuedConnection);
-    }
-
-    if(state.imageSize.isValid())
-        ui->openGLWidget->setImageSize(state.imageSize);
-
-    refreshUiFromState(state);
-}
-
-void CamDisplay::refreshUiFromState(const CamDeviceState& state)
-{
     refresh = true;
 
     QSignalBlocker blockerTriggerMode(ui->comboBox_trigger_model);
@@ -162,45 +60,24 @@ void CamDisplay::refreshUiFromState(const CamDeviceState& state)
     QSignalBlocker blockerDeNoiseMode(ui->comboBox_denoise);
 
     ui->comboBox_trigger_model->clear();
-    ui->comboBox_trigger_model->addItems(state.triggerModeList);
-    if(state.currentTriggerMode >= 0 && state.currentTriggerMode < ui->comboBox_trigger_model->count())
-        ui->comboBox_trigger_model->setCurrentIndex(state.currentTriggerMode);
+    ui->comboBox_trigger_model->addItems(camera->TriggerModeList);
+    ui->comboBox_trigger_model->setCurrentIndex(camera->GetCurrentTriggerMode());
 
     ui->comboBox_trigger_source->clear();
-    ui->comboBox_trigger_source->addItems(state.triggerSourceList);
-    if(state.currentTriggerSource >= 0 && state.currentTriggerSource < ui->comboBox_trigger_source->count())
-        ui->comboBox_trigger_source->setCurrentIndex(state.currentTriggerSource);
+    ui->comboBox_trigger_source->addItems(camera->TriggerSourceList);
+    ui->comboBox_trigger_source->setCurrentIndex(camera->GetCurrentTriggerSource());
 
     ui->comboBox_trigger_active->clear();
-    ui->comboBox_trigger_active->addItems(state.triggerActiveList);
-    if(state.currentTriggerActive >= 0 && state.currentTriggerActive < ui->comboBox_trigger_active->count())
-        ui->comboBox_trigger_active->setCurrentIndex(state.currentTriggerActive);
+    ui->comboBox_trigger_active->addItems(camera->TriggerActiveList);
+    ui->comboBox_trigger_active->setCurrentIndex(camera->GetCurrentTriggerActive());
 
     ui->comboBox_framrate_mode->clear();
-    ui->comboBox_framrate_mode->addItems(state.frameRateModeList);
-    if(state.currentFrameRateMode >= 0 && state.currentFrameRateMode < ui->comboBox_framrate_mode->count())
-        ui->comboBox_framrate_mode->setCurrentIndex(state.currentFrameRateMode);
+    ui->comboBox_framrate_mode->addItems(camera->FrameRateModeList);
+    ui->comboBox_framrate_mode->setCurrentIndex(camera->GetCurrentFrameRateMode());
 
     ui->comboBox_denoise->clear();
-    ui->comboBox_denoise->addItems(state.deNoiseModeList);
-    if(state.currentDeNoiseMode >= 0 && state.currentDeNoiseMode < ui->comboBox_denoise->count())
-        ui->comboBox_denoise->setCurrentIndex(state.currentDeNoiseMode);
-
-    if(state.isOpen)
-    {
-        ui->lineEdit_exposetime->setText(QString::number(state.shutterValue));
-        ui->lineEdit_gain->setText(QString::number(state.gainValue));
-        ui->lineEdit_framerate->setText(QString::number(state.frameRateValue));
-        ui->lineEdit_denoise->setText(QString::number(state.deNoiseValue));
-
-        ui->label_display_ShutterValue->setToolTip(QString::number(state.shutterMin) + QStringLiteral("~") + QString::number(state.shutterMax));
-        ui->label_display_Gain->setToolTip(QString::number(state.gainMin) + QStringLiteral("~") + QString::number(state.gainMax));
-        ui->label_display_FrameRate->setToolTip(QString::number(state.frameRateMin) + QStringLiteral("~") + QString::number(state.frameRateMax));
-        ui->label_display_DeNoise->setToolTip(QString::number(state.deNoiseMin) + QStringLiteral("~") + QString::number(state.deNoiseMax));
-
-        ui->label_savepath_display->setText(state.savePath);
-        ui->label_savepath_display->setWordWrap(true);
-    }
+    ui->comboBox_denoise->addItems(camera->DeNoiseModeList);
+    ui->comboBox_denoise->setCurrentIndex(camera->GetCurrentDeNoiseMode());
 
     refresh = false;
 }
@@ -220,18 +97,17 @@ void CamDisplay::warnCameraNotSnap()
 ///
 void CamDisplay::soft_trigger()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-    if(!m_cameraSnap)
+    if(!camera->isSnap())
     {
         warnCameraNotSnap();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker, "softwareTrigger", Qt::QueuedConnection);
+    camera->SoftwareTrigger();
 }
 
 ///
@@ -239,18 +115,18 @@ void CamDisplay::soft_trigger()
 ///
 void CamDisplay::SaveOnce()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-    if(!m_cameraSnap)
+    if(!camera->isSnap())
     {
         warnCameraNotSnap();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker, "saveOnce", Qt::QueuedConnection);
+    if(camera->m_pBitmap)
+        camera->m_pBitmap->SaveOnce();
 }
 
 void CamDisplay::SaveContinuous(bool checkstate)
@@ -260,13 +136,13 @@ void CamDisplay::SaveContinuous(bool checkstate)
 
 void CamDisplay::setCountSaveChecked(bool checked)
 {
-    // setChecked 会触发 on_checkBox_countsave_stateChanged，自动把状态下发到相机 worker。
+    // setChecked 会触发 on_checkBox_countsave_stateChanged，自动下发到相机。
     ui->checkBox_countsave->setChecked(checked);
 }
 
 void CamDisplay::setSaveChecked(bool checked)
 {
-    // setChecked 会触发 on_checkBox_stateChanged，自动把状态下发到相机 worker。
+    // setChecked 会触发 on_checkBox_stateChanged，自动下发到相机。
     ui->checkBox->setChecked(checked);
 }
 
@@ -282,12 +158,18 @@ bool CamDisplay::isSaveChecked() const
 
 string CamDisplay::get_saveoncename()
 {
-    return m_state.savePath.toStdString();
+    if(camera && camera->m_pBitmap)
+        return camera->m_pBitmap->GetSavepath();
+    return string();
 }
 
 void CamDisplay::closeEvent(QCloseEvent *event)
 {
-    shutdownCameraThread();
+    disconnectBitmapSignal();
+    if(ui && ui->openGLWidget)
+        ui->openGLWidget->Clear();
+    if(camera)
+        camera->Close_Cam();
     if(event)
         event->accept();
     QMainWindow::closeEvent(event);
@@ -298,22 +180,55 @@ void CamDisplay::closeEvent(QCloseEvent *event)
 ///
 void CamDisplay::on_pushButton_open_cam_clicked()
 {
-    if(m_cameraOpen)
+    if(camera->isOpen())
     {
         QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("相机已打开"));
         return;
     }
 
-    if(!m_cameraWorker)
-        initCameraThread();
+    camera->Open_Cam(camindex);
 
-    if(!m_cameraWorker)
+    // Open_Cam 失败时会记录 lastError 且 m_pBitmap 可能未创建。
+    if(!camera->isOpen() || !camera->m_pBitmap)
+    {
+        const QString err = camera->lastError();
+        camera->clearLastError();
+        QMessageBox::warning(this, QString::fromLocal8Bit("警告"),
+                             err.isEmpty() ? QString::fromLocal8Bit("打开相机失败") : err);
         return;
+    }
 
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "openCamera",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, camindex));
+    ui->openGLWidget->setImageSize(camera->m_pBitmap->GetPicSize());
+    connect(camera->m_pBitmap, &CGXBitmap::ShowCallback,
+            ui->openGLWidget, &GL_Image::refresh, Qt::QueuedConnection);
+
+    const QString defaultPath = QStringLiteral("C:/Users/10782/Desktop/calibrate/data/test_multifrequency_cuda%1").arg(camindex);
+    camera->m_pBitmap->SetSavePath(defaultPath.toStdString());
+    ui->label_savepath_display->setText(QString::fromStdString(camera->m_pBitmap->GetSavepath()));
+    ui->label_savepath_display->setWordWrap(true);
+
+    ui->lineEdit_exposetime->setText(QString::number(camera->GetShutterValue()));
+    ui->lineEdit_gain->setText(QString::number(camera->GetGain()));
+    ui->lineEdit_framerate->setText(QString::number(camera->GetFrameRate()));
+    ui->lineEdit_denoise->setText(QString::number(camera->GetDeNoiseValue()));
+
+    double shutterMin, shutterMax;
+    camera->GetShutterValueMinMax(shutterMin, shutterMax);
+    ui->label_display_ShutterValue->setToolTip(QString::number(shutterMin) + QStringLiteral("~") + QString::number(shutterMax));
+
+    double gainMin, gainMax;
+    camera->GetGainMinMax(gainMin, gainMax);
+    ui->label_display_Gain->setToolTip(QString::number(gainMin) + QStringLiteral("~") + QString::number(gainMax));
+
+    double frameRateMin, frameRateMax;
+    camera->GetFrameRateMinMax(frameRateMin, frameRateMax);
+    ui->label_display_FrameRate->setToolTip(QString::number(frameRateMin) + QStringLiteral("~") + QString::number(frameRateMax));
+
+    double deNoiseMin, deNoiseMax;
+    camera->GetDeNoiseMinMax(deNoiseMin, deNoiseMax);
+    ui->label_display_DeNoise->setToolTip(QString::number(deNoiseMin) + QStringLiteral("~") + QString::number(deNoiseMax));
+
+    refreshUiFromCamera();
 }
 
 ///
@@ -321,10 +236,12 @@ void CamDisplay::on_pushButton_open_cam_clicked()
 ///
 void CamDisplay::on_pushButton_close_cam_clicked()
 {
-    if(!m_cameraWorker)
-        return;
-
-    QMetaObject::invokeMethod(m_cameraWorker, "closeCamera", Qt::QueuedConnection);
+    disconnectBitmapSignal();
+    if(ui && ui->openGLWidget)
+        ui->openGLWidget->Clear();
+    if(camera)
+        camera->Close_Cam();
+    refreshUiFromCamera();
 }
 
 ///
@@ -332,18 +249,17 @@ void CamDisplay::on_pushButton_close_cam_clicked()
 ///
 void CamDisplay::on_pushButton_startsnap_clicked()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-    if(m_cameraSnap)
+    if(camera->isSnap())
     {
         QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("相机正在采集"));
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker, "startSnap", Qt::QueuedConnection);
+    camera->StartSnap();
 }
 
 ///
@@ -351,32 +267,22 @@ void CamDisplay::on_pushButton_startsnap_clicked()
 ///
 void CamDisplay::on_pushButton_stopsnap_clicked()
 {
-    if(!m_cameraWorker)
-        return;
-
-    QMetaObject::invokeMethod(m_cameraWorker, "stopSnap", Qt::QueuedConnection);
+    if(camera)
+        camera->StopSnap();
 }
 
 void CamDisplay::on_comboBox_trigger_model_currentIndexChanged(int index)
 {
-    if(refresh || !m_cameraOpen || index < 0)
+    if(refresh || !camera->isOpen() || index < 0)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCurrentTriggerMode",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, index));
+    camera->SetCurrentTriggerMode(index);
 }
 
 void CamDisplay::on_comboBox_trigger_source_currentIndexChanged(int index)
 {
-    if(refresh || !m_cameraOpen || index < 0)
+    if(refresh || !camera->isOpen() || index < 0)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCurrentTriggerSource",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, index));
+    camera->SetCurrentTriggerSource(index);
 }
 
 void CamDisplay::on_pushButton_soft_trigger_clicked()
@@ -386,39 +292,31 @@ void CamDisplay::on_pushButton_soft_trigger_clicked()
 
 void CamDisplay::on_comboBox_trigger_active_currentIndexChanged(int index)
 {
-    if(refresh || !m_cameraOpen || index < 0)
+    if(refresh || !camera->isOpen() || index < 0)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCurrentTriggerActive",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, index));
+    camera->SetCurrentTriggerActive(index);
 }
 
 void CamDisplay::on_checkBox_stateChanged(int arg1)
 {
     Q_UNUSED(arg1)
-    if(!m_cameraOpen || !m_cameraWorker)
+    if(!camera->isOpen() || !camera->m_pBitmap)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setSaveEnabled",
-                              Qt::QueuedConnection,
-                              Q_ARG(bool, ui->checkBox->isChecked()));
+    camera->m_pBitmap->SetSave(ui->checkBox->isChecked());
 }
 
 void CamDisplay::on_lineEdit_exposetime_editingFinished()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setShutterValue",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, ui->lineEdit_exposetime->text().toDouble()));
+    if(!camera->SetShutterValue(ui->lineEdit_exposetime->text().toDouble()))
+    {
+        QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("输入范围无效"));
+        ui->lineEdit_exposetime->setText(QString::number(camera->GetShutterValue()));
+    }
 }
 
 void CamDisplay::on_pushButton_saveonce_clicked()
@@ -429,18 +327,14 @@ void CamDisplay::on_pushButton_saveonce_clicked()
 void CamDisplay::on_checkBox_countsave_stateChanged(int arg1)
 {
     Q_UNUSED(arg1)
-    if(!m_cameraOpen || !m_cameraWorker)
+    if(!camera->isOpen() || !camera->m_pBitmap)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCountSaveEnabled",
-                              Qt::QueuedConnection,
-                              Q_ARG(bool, ui->checkBox_countsave->isChecked()));
+    camera->m_pBitmap->SetCount(ui->checkBox_countsave->isChecked());
 }
 
 void CamDisplay::on_pushButton_setsavepath_clicked()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
@@ -452,10 +346,12 @@ void CamDisplay::on_pushButton_setsavepath_clicked()
     if(path.isEmpty())
         return;
 
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setSavePath",
-                              Qt::QueuedConnection,
-                              Q_ARG(QString, path));
+    if(camera->m_pBitmap)
+    {
+        camera->m_pBitmap->SetSavePath(path.toStdString());
+        ui->label_savepath_display->setText(QString::fromStdString(camera->m_pBitmap->GetSavepath()));
+        ui->label_savepath_display->setWordWrap(true);
+    }
 }
 
 void CamDisplay::on_action_switch_triggered()
@@ -468,93 +364,86 @@ void CamDisplay::on_action_switch_triggered()
 
 void CamDisplay::on_actionshowLine_triggered()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-    if(!m_cameraSnap)
+    if(!camera->isSnap())
     {
         QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("Camera doesn't collect"));
         return;
     }
-    if(!m_bitmap)
+    if(!camera->m_pBitmap)
         return;
 
+    const QSize picSize = camera->m_pBitmap->GetPicSize();
     LineDisplay = new Form_linepix_display(nullptr);
     LineDisplay->show();
-    for (int i = 0; i < m_state.imageSize.width(); ++i)
+    for (int i = 0; i < picSize.width(); ++i)
     {
         LineDisplay->x.push_back(i);
         LineDisplay->y.push_back(0);
     }
-    LineDisplay->pic_width = m_state.imageSize.width();
-    LineDisplay->pic_height = m_state.imageSize.height();
-    connect(m_bitmap, &CGXBitmap::ShowCallback,
+    LineDisplay->pic_width = picSize.width();
+    LineDisplay->pic_height = picSize.height();
+    connect(camera->m_pBitmap, &CGXBitmap::ShowCallback,
             LineDisplay, &Form_linepix_display::picture_refreshed,
             Qt::QueuedConnection);
 }
 
 void CamDisplay::on_lineEdit_gain_editingFinished()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setGain",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, ui->lineEdit_gain->text().toDouble()));
+    if(!camera->SetGain(ui->lineEdit_gain->text().toDouble()))
+    {
+        QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("输入范围无效"));
+        ui->lineEdit_gain->setText(QString::number(camera->GetGain()));
+    }
 }
 
 void CamDisplay::on_comboBox_framrate_mode_currentIndexChanged(int index)
 {
-    if(refresh || !m_cameraOpen || index < 0)
+    if(refresh || !camera->isOpen() || index < 0)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCurrentFrameRateMode",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, index));
+    camera->SetCurrentFrameRateMode(index);
 }
 
 void CamDisplay::on_lineEdit_framerate_editingFinished()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setFrameRate",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, ui->lineEdit_framerate->text().toDouble()));
+    if(!camera->SetFrameRate(ui->lineEdit_framerate->text().toDouble()))
+    {
+        QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("输入范围无效"));
+        ui->lineEdit_framerate->setText(QString::number(camera->GetFrameRate()));
+    }
 }
 
 void CamDisplay::on_comboBox_denoise_currentIndexChanged(int index)
 {
-    if(refresh || !m_cameraOpen || index < 0)
+    if(refresh || !camera->isOpen() || index < 0)
         return;
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setCurrentDeNoiseMode",
-                              Qt::QueuedConnection,
-                              Q_ARG(int, index));
+    camera->SetCurrentDeNoiseMode(index);
 }
 
 void CamDisplay::on_lineEdit_denoise_editingFinished()
 {
-    if(!m_cameraOpen)
+    if(!camera->isOpen())
     {
         warnCameraNotOpen();
         return;
     }
-
-    QMetaObject::invokeMethod(m_cameraWorker,
-                              "setDeNoiseValue",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, ui->lineEdit_denoise->text().toDouble()));
+    if(!camera->SetDeNoiseValue(ui->lineEdit_denoise->text().toDouble()))
+    {
+        QMessageBox::warning(this, QString::fromLocal8Bit("警告"), QString::fromLocal8Bit("输入范围无效"));
+        ui->lineEdit_denoise->setText(QString::number(camera->GetDeNoiseValue()));
+    }
 }
