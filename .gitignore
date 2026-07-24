@@ -13,6 +13,12 @@ cmake-build-*/
 *.exp
 *.a
 
+# ===== 例外：项目必需的第三方 SDK 库（否则 clone 后无法编译/运行） =====
+# 上面的 *.lib/*.dll 会忽略所有库，这里用白名单放行相机/投影仪/共聚焦传感器的 SDK 库。
+!CAM/lib/**
+!DLP/cyusbserial/**
+!CF_sensor/CFxxxx_Lib/lib/**
+
 # ===== CMake 生成物 =====
 CMakeCache.txt
 CMakeFiles/
