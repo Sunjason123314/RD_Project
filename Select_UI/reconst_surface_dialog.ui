@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>460</height>
+    <height>600</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -60,6 +60,11 @@
      <item>
       <property name="text">
        <string>NURBS（光滑参数曲面）</string>
+      </property>
+     </item>
+     <item>
+      <property name="text">
+       <string>蒙皮（Loft 放样）</string>
       </property>
      </item>
     </widget>
@@ -342,6 +347,95 @@
         </property>
         <property name="toolTip">
          <string>将拟合后的 NURBS 曲面三角化为网格时，每个参数方向上的采样点数。值越高输出网格越密越光滑（64 → 4096 个面片；256 → 65536 个面片）。</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="groupBoxLoft">
+     <property name="title">
+      <string>蒙皮参数</string>
+     </property>
+     <property name="styleSheet">
+      <string notr="true">QGroupBox { font-weight: bold; }</string>
+     </property>
+     <layout class="QFormLayout" name="formLayoutLoft">
+      <property name="labelAlignment">
+       <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+      </property>
+      <property name="horizontalSpacing">
+       <number>12</number>
+      </property>
+      <property name="verticalSpacing">
+       <number>6</number>
+      </property>
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="checkBoxMultiSection">
+        <property name="text">
+         <string>输入已是多截面格式</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+        <property name="toolTip">
+         <string>勾选（输入已是多截面）：
+· 若在列表中多选了多片点云 → 每片作为一个截面；
+· 若只选一片、但其内部已含多个分离截面 → 沿主轴按间隙自动切分成多个截面（截面数由数据决定）。
+不勾选：对单个选中点云先沿主轴 PCA 均匀切片，再蒙皮（切片数见下）。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="labelLoftSlices">
+        <property name="text">
+         <string>切片数</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="spinBoxLoftSlices">
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>500</number>
+        </property>
+        <property name="value">
+         <number>20</number>
+        </property>
+        <property name="toolTip">
+         <string>未勾选“多截面格式”时，对单个点云沿主轴切成的截面数量。勾选时此项无效。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="labelLoftResolution">
+        <property name="text">
+         <string>每截面采样点数</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="spinBoxLoftResolution">
+        <property name="minimum">
+         <number>0</number>
+        </property>
+        <property name="maximum">
+         <number>100000</number>
+        </property>
+        <property name="singleStep">
+         <number>1000</number>
+        </property>
+        <property name="value">
+         <number>0</number>
+        </property>
+        <property name="specialValueText">
+         <string>自动</string>
+        </property>
+        <property name="toolTip">
+         <string>每个截面均匀化+重采样后的点数。0=自动（取各截面点数中位数，上限1000）；手动设置可控制细节精度，值越大越精细但计算越慢。</string>
         </property>
        </widget>
       </item>

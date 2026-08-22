@@ -84,7 +84,7 @@ public:
                                       int polynomialOrder = 2);
 
     // 表面重建方法
-    enum class ReconMethod { Greedy, Poisson, Nurbs };
+    enum class ReconMethod { Greedy, Poisson, Nurbs, Loft };
 
     // 表面重建：根据指定方法从点云重建三角网格。
     // voxelLeafSize / maxSurfaceAngleDeg 仅对 Greedy 方法生效。
@@ -103,6 +103,51 @@ public:
                                         int order = 3,
                                         int refinement = 5,
                                         int resolution = 64);
+
+    // 将单个截面（乱序点）排成开放链并按弧长重采样为 nSamples 个点。
+    // 针对翼型/细长开放弧：沿主弦方向投影排序，从一端排到另一端，不闭合。
+    // refChord 为全局参考弦向（各截面共用，保证方向一致，无需事后翻转）；
+    //   传 Zero 时函数内部用本截面 PCA 主方向。
+    // 失败（点数不足）返回空 vector。
+    // refChord/refThick 为截面平面内的弦向/厚度向基底（各截面共用同一符号→保证绕行方向一致）；
+    //   传 Zero 时函数内部用本截面 PCA 估计。按绕质心极角排成闭合轮廓再弧长重采样。
+    static std::vector<Eigen::Vector3f> orderAndResampleSection(
+        const PCLCloud::Ptr& section,
+        int nSamples,
+        const Eigen::Vector3f& refChord = Eigen::Vector3f::Zero(),
+        const Eigen::Vector3f& refThick = Eigen::Vector3f::Zero());
+
+    // 蒙皮（Loft/放样）重建：多个有序开放截面 → 三角网格。
+    // sections 需按空间顺序（如沿主轴）排好；每个截面内部乱序，函数内部排序+重采样。
+    // 相邻两截面的对应重采样点连成四边形（每四边形拆 2 个三角形）。
+    // nSamples <= 0 时自动取各截面点数的中位数（截断到 [20,400]）。
+    static PCLMesh loftReconstruction(
+        const std::vector<PCLCloud::Ptr>& sections,
+        int nSamples = 0);
+
+    // 将”已含多个离散截面”的单个点云沿主轴按间隙自动切分成多个截面。
+    // 用于蒙皮：五个截面扫在同一片点云里时，按主轴投影上的空隙聚类分段。
+    // 截面数由数据自动决定（无需外部指定）。切不出 >=2 段时返回空。
+    static std::vector<PCLCloud::Ptr> splitCloudIntoSections(const PCLCloud::Ptr& cloud);
+
+    // 【任务1】弦向切片重采样：沿弦线做垂面，基于几何特征统一各截面的点数和分布。
+    // nSlices: 垂面数量（用户指定）。
+    // 返回：有序点云，点数 = nSlices×2+2（每垂面上下各1点 + 前后缘顶点）。
+    // 流程：粗排序 → 插值 → 找弦线端点 → 沿弦线放垂面 → 每垂面收集上下点 → 组装输出。
+    static PCLCloud::Ptr resampleSectionByChordSlicing(
+        const PCLCloud::Ptr& section, int nSlices);
+
+    // 【方案二】用中弧线把截面分成上/下两个面(叶盆/叶背)，各自沿弦向等弧长插值。
+    // camber-aware：先按弦线粗分 → 拟合中弧线 → 按中弧线精分，对弯度鲁棒。
+    // nInterp: 每个面插值点数。两个面各自是一条开放曲线，不闭合。
+    // 输出经 upperOut / lowerOut 返回（分别是叶背/叶盆），成功返回 true。
+    // refU/refV: 可选的参考方向(用于多截面对齐)。非空时：
+    //   - 输入若已初始化(非零)，则强制本截面 u/v 与其符号一致，避免截面间翻转；
+    //   - 输出写回本截面实际使用的 u/v，供下一截面作参考。
+    static bool separateBladeSurfaces(
+        const PCLCloud::Ptr& section, int nInterp,
+        PCLCloud::Ptr& upperOut, PCLCloud::Ptr& lowerOut,
+        Eigen::Vector3f* refU = nullptr, Eigen::Vector3f* refV = nullptr);
 
     // 网格精简到目标面数（渐进式 Quadric Decimation）。
     static void decimateMesh(PCLMesh& mesh, int targetFaces);

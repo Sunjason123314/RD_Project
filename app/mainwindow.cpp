@@ -781,13 +781,13 @@ void MainWindow::showPointCloudListContextMenu(const QPoint& pos)
             hasHidden = true;
     }
 
-    QAction *showAction = nullptr;
-    QAction *hideAction = nullptr;
-    if(hasHidden)
-        showAction = menu.addAction(tr("Show selected point cloud(s)"));
+    QAction *visibilityAction = nullptr;
     if(hasVisible)
-        hideAction = menu.addAction(tr("Hide selected point cloud(s)"));
-    if((showAction || hideAction) && !selectedRows.isEmpty())
+        visibilityAction = menu.addAction(tr("Hide selected"));
+    else if(hasHidden)
+        visibilityAction = menu.addAction(tr("Show selected"));
+
+    if(visibilityAction)
         menu.addSeparator();
 
     QAction *saveAction = menu.addAction(tr("Save selected..."));
@@ -833,10 +833,8 @@ void MainWindow::showPointCloudListContextMenu(const QPoint& pos)
     QAction* removeFromGroupAction = anyGrouped ? menu.addAction(tr("Remove from group")) : nullptr;
 
     QAction *selectedAction = menu.exec(ui->listWidgetPointCloudFiles->viewport()->mapToGlobal(pos));
-    if(selectedAction == showAction)
-        setSelectedPointCloudVisibility(true);
-    else if(selectedAction == hideAction)
-        setSelectedPointCloudVisibility(false);
+    if(selectedAction == visibilityAction)
+        toggleSelectedPointCloudVisibility();
     else if(selectedAction == saveAction)
         saveSelectedPointCloudEntries();
     else if(selectedAction == deleteAction)
@@ -6680,6 +6678,7 @@ void MainWindow::on_reconstructSurface_clicked()
         dlgUi.groupBoxMesh->setEnabled(index == 0);
         dlgUi.groupBoxPoisson->setEnabled(index == 1);
         dlgUi.groupBoxNurbs->setEnabled(index == 2);
+        dlgUi.groupBoxLoft->setEnabled(index == 3);
         switch (index) {
         case 0: dlgUi.labelMethodDesc->setText(
             QStringLiteral("\u8D2A\u5A6A\u4E09\u89D2\u5316\u5C06\u5C40\u90E8\u90BB\u57DF\u6295\u5F71\u5230\u5207\u5E73\u9762\u5E76\u8FDE\u63A5\uFF0C\u901F\u5EA6\u5FEB\uFF0C\u9002\u5408\u53F6\u7247\u7B49\u5355\u4FA7\u626B\u63CF\u7684\u5F00\u653E\u66F2\u9762\u3002")); break;
@@ -6687,6 +6686,8 @@ void MainWindow::on_reconstructSurface_clicked()
             QStringLiteral("Poisson \u901A\u8FC7\u516B\u53C9\u6811\u4E0A\u7684\u9690\u5F0F\u51FD\u6570\u91CD\u5EFA\u5149\u6ED1\u5C01\u95ED\u7684\u6C34\u5BC6\u66F2\u9762\uFF0C\u9002\u5408\u5168\u65B9\u4F4D\u626B\u63CF\u7684\u7269\u4F53\u3002")); break;
         case 2: dlgUi.labelMethodDesc->setText(
             QStringLiteral("NURBS \u5C06\u5149\u6ED1\u7684\u53C2\u6570\u66F2\u9762\u62DF\u5408\u5230\u70B9\u4E91\uFF0C\u751F\u6210\u6570\u5B66\u4E0A\u5E73\u6ED1\u3001\u53EF\u7F16\u8F91\u7684\u66F2\u9762\uFF0C\u4F46\u901F\u5EA6\u8F83\u6162\u3002")); break;
+        case 3: dlgUi.labelMethodDesc->setText(
+            QStringLiteral("\u8499\u76AE\uFF08\u653E\u6837\uFF09\u5C06\u591A\u4E2A\u6709\u5E8F\u622A\u9762\u6309\u5F27\u957F\u91CD\u91C7\u6837\u540E\u9010\u7247\u8FDE\u6210\u56DB\u8FB9\u5F62\u7F51\u683C\uFF0C\u9002\u5408\u7FFC\u578B\u7B49\u6CBF\u4E3B\u8F74\u5207\u7247\u7684\u53F6\u7247\u3002\u53EF\u76F4\u63A5\u591A\u9009\u5DF2\u6709\u622A\u9762\uFF0C\u6216\u5BF9\u5355\u70B9\u4E91\u73B0\u5207\u3002")); break;
         }
     };
     connect(dlgUi.comboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -6710,18 +6711,24 @@ void MainWindow::on_reconstructSurface_clicked()
     const int poissonDepth = dlgUi.spinBoxPoissonDepth->value();
     const int poissonSolverDivide = dlgUi.spinBoxPoissonSolverDivide->value();
     const int poissonIsoDivide = dlgUi.spinBoxPoissonIsoDivide->value();
+    // Loft params
+    const bool useLoft = (methodIndex == 3);
+    const bool loftMultiSection = dlgUi.checkBoxMultiSection->isChecked();
+    const int loftSlices = dlgUi.spinBoxLoftSlices->value(); // 仅单点云切片模式使用
+    const int loftResolution = dlgUi.spinBoxLoftResolution->value(); // 0=自动
 
     // ---------- 2. 收集待重建点云 ----------
-    // 优先取 3D 视图中手动框选的单点，为空则取左侧列表选中的完整点云（排除隐藏条目）
-    pcl::PointCloud<pcl::PointXYZ>::Ptr selected_cloud = ui->DicGLWidget->selectedPointsCloud();
+    // 蒙皮法需要多个有序截面，走独立的收集流程；其余方法收集单个合并点云。
+    std::vector<PCLCloud::Ptr> loftSections;   // 仅蒙皮法使用
+    pcl::PointCloud<pcl::PointXYZ>::Ptr selected_cloud;
 
-    if (!selected_cloud || selected_cloud->empty())
+    if (useLoft)
     {
+        // 收集左侧列表中选中的点云条目（按列表行序，通常即 slice_00/01/... 的主轴顺序）
         std::vector<int> cloudIndices;
         if (ui->listWidgetPointCloudFiles && ui->listWidgetPointCloudFiles->selectionModel())
         {
             const QModelIndexList rows = ui->listWidgetPointCloudFiles->selectionModel()->selectedRows();
-            cloudIndices.reserve(rows.size());
             for (const QModelIndex& idx : rows)
             {
                 const QStandardItem* item = pointCloudListModel ? pointCloudListModel->item(idx.row()) : nullptr;
@@ -6734,15 +6741,133 @@ void MainWindow::on_reconstructSurface_clicked()
             }
         }
 
-        // mergedPointCloudByIndices 第二个参数为 true 表示跳过隐藏点云
-        selected_cloud = ui->DicGLWidget->mergedPointCloudByIndices(cloudIndices, true);
-    }
+        if (loftMultiSection)
+        {
+            // 收集选中的点云（每个条目一片）
+            std::vector<PCLCloud::Ptr> picked;
+            for (int ci : cloudIndices)
+            {
+                PCLCloud::Ptr c = ui->DicGLWidget->pointCloudByIndex(ci);
+                if (c && c->size() >= 2)
+                    picked.push_back(c);
+            }
 
-    // 至少 3 个点才能构成一个三角面片
-    if (!selected_cloud || selected_cloud->size() < 3)
+            if (picked.size() >= 2)
+            {
+                // 情况 A：选了多个条目，每个条目直接作为一个截面
+                loftSections = std::move(picked);
+            }
+            else if (picked.size() == 1)
+            {
+                // 情况 B：只选了一个点云，但它内部已含多个离散截面 →
+                // 沿主轴按间隙自动切分（截面数由数据决定，不用手填）
+                loftSections = Point_Algorithm::splitCloudIntoSections(picked.front());
+                if (loftSections.size() >= 2)
+                    ui->plainTextEdit->appendPlainText(systemTime() + " " +
+                        tr("Loft: auto-split single cloud into %1 sections.")
+                            .arg(loftSections.size()));
+            }
+
+            if (loftSections.size() < 2)
+            {
+                ui->plainTextEdit->appendPlainText(systemTime() + " " +
+                    tr("Loft: could not obtain >=2 sections. Select multiple section clouds, "
+                       "or select one cloud that contains separated sections."));
+                return;
+            }
+        }
+        else
+        {
+            // 对单个选中点云沿主轴 PCA 切片，生成有序截面
+            PCLCloud::Ptr single = ui->DicGLWidget->mergedPointCloudByIndices(cloudIndices, true);
+            if (!single || single->size() < static_cast<std::size_t>(loftSlices))
+            {
+                ui->plainTextEdit->appendPlainText(systemTime() + " " +
+                    tr("Loft slicing needs a single point cloud with enough points."));
+                return;
+            }
+            const Point_Algorithm::PCAResult pr = Point_Algorithm::pcaAnalysis(single);
+            if (!pr.success)
+            {
+                ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("PCA failed for loft slicing."));
+                return;
+            }
+            const Eigen::Vector3f pc1 = pr.eigenvectors.col(0).normalized();
+            float tMin = std::numeric_limits<float>::max(), tMax = -tMin;
+            for (const auto& p : single->points)
+            {
+                const float t = (Eigen::Vector3f(p.x, p.y, p.z) - pr.centroid).dot(pc1);
+                tMin = std::min(tMin, t); tMax = std::max(tMax, t);
+            }
+            const float span = std::max(tMax - tMin, 1e-4f);
+            const float halfTol = (span / static_cast<float>(loftSlices)) * 0.75f; // 相邻切片略有重叠，保证连续
+            for (int i = 0; i < loftSlices; ++i)
+            {
+                const float tc = tMin + span * static_cast<float>(i) / static_cast<float>(loftSlices - 1);
+                PCLCloud::Ptr sc(new PCLCloud);
+                for (const auto& p : single->points)
+                {
+                    const Eigen::Vector3f pt(p.x, p.y, p.z);
+                    const float proj = (pt - pr.centroid).dot(pc1);
+                    if (std::abs(proj - tc) <= halfTol)
+                    {
+                        const Eigen::Vector3f projected = pt - pc1 * (proj - tc);
+                        sc->points.emplace_back(projected.x(), projected.y(), projected.z());
+                    }
+                }
+                if (sc->size() >= 2)
+                {
+                    sc->width = static_cast<uint32_t>(sc->points.size());
+                    sc->height = 1;
+                    loftSections.push_back(sc);
+                }
+            }
+            if (loftSections.size() < 2)
+            {
+                ui->plainTextEdit->appendPlainText(systemTime() + " " +
+                    tr("Loft slicing produced too few non-empty sections."));
+                return;
+            }
+        }
+
+        // 合并所有截面点，供后续裁剪/日志使用
+        selected_cloud.reset(new PCLCloud);
+        for (const auto& s : loftSections) *selected_cloud += *s;
+    }
+    else
     {
-        ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("No valid selected points/clouds for reconstruction (hidden clouds excluded)."));
-        return;
+        // 优先取 3D 视图中手动框选的单点，为空则取左侧列表选中的完整点云（排除隐藏条目）
+        selected_cloud = ui->DicGLWidget->selectedPointsCloud();
+
+        if (!selected_cloud || selected_cloud->empty())
+        {
+            std::vector<int> cloudIndices;
+            if (ui->listWidgetPointCloudFiles && ui->listWidgetPointCloudFiles->selectionModel())
+            {
+                const QModelIndexList rows = ui->listWidgetPointCloudFiles->selectionModel()->selectedRows();
+                cloudIndices.reserve(rows.size());
+                for (const QModelIndex& idx : rows)
+                {
+                    const QStandardItem* item = pointCloudListModel ? pointCloudListModel->item(idx.row()) : nullptr;
+                    if(item && item->data(RoleEntryType).toInt() == static_cast<int>(PointCloudEntryType::PointCloud))
+                    {
+                        const int cloudIndex = item->data(RolePointCloudIndex).toInt();
+                        if(cloudIndex >= 0)
+                            cloudIndices.push_back(cloudIndex);
+                    }
+                }
+            }
+
+            // mergedPointCloudByIndices 第二个参数为 true 表示跳过隐藏点云
+            selected_cloud = ui->DicGLWidget->mergedPointCloudByIndices(cloudIndices, true);
+        }
+
+        // 至少 3 个点才能构成一个三角面片
+        if (!selected_cloud || selected_cloud->size() < 3)
+        {
+            ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("No valid selected points/clouds for reconstruction (hidden clouds excluded)."));
+            return;
+        }
     }
 
     // ---------- 2.5 曲率自适应降采样（仅 Poisson：水密重建能从非均匀采样中受益） ----------
@@ -6762,20 +6887,59 @@ void MainWindow::on_reconstructSurface_clicked()
     // ---------- 3. 调用重建算法 ----------
     if(ui && ui->plainTextEdit)
     {
-        const QString methodLabel = useNurbs ? QStringLiteral("NURBS")
+        const QString methodLabel = useLoft ? QStringLiteral("Loft")
+            : useNurbs ? QStringLiteral("NURBS")
             : usePoisson ? QStringLiteral("Poisson") : QStringLiteral("Mesh");
         ui->plainTextEdit->appendPlainText(
             systemTime() + " " + tr("Starting %1 reconstruction with %2 points...")
                 .arg(methodLabel).arg(selected_cloud->size()));
     }
 
-    const auto reconMethod = useNurbs ? Point_Algorithm::ReconMethod::Nurbs
-        : usePoisson ? Point_Algorithm::ReconMethod::Poisson
-        : Point_Algorithm::ReconMethod::Greedy;
-    pcl::PolygonMesh reconstructed_mesh = Point_Algorithm::reconstructMesh(
-        selected_cloud, reconMethod, voxelLeafSize, maxSurfaceAngleDeg,
-        nurbsOrder, nurbsRefinement, nurbsResolution,
-        poissonDepth, poissonSolverDivide, poissonIsoDivide);
+    // ===== 蒙皮法重建 =====
+    if (useLoft)
+    {
+        // loftResolution: 每个面的插值点数，<=0 时默认 1000
+        const int nInterpPerSurface = (loftResolution > 0) ? loftResolution : 1000;
+
+        ui->plainTextEdit->appendPlainText(
+            systemTime() + " " + tr("Loft: %1 个截面, 开始网格重建...")
+                .arg(loftSections.size()));
+
+        pcl::PolygonMesh reconstructed_mesh = Point_Algorithm::loftReconstruction(loftSections, nInterpPerSurface);
+
+        if (reconstructed_mesh.polygons.empty())
+        {
+            ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Loft: 网格重建失败。"));
+            return;
+        }
+
+        ui->DicGLWidget->add_mesh(reconstructed_mesh);
+        addPointCloudFileListItem(QStringLiteral("loft_mesh"),
+                                  QStringLiteral("loft_mesh(蒙皮网格)"),
+                                  static_cast<int>(PointCloudEntryType::Reconstruction),
+                                  ui->DicGLWidget->meshCount() - 1,  // meshIndex
+                                  -1);                                // pointCloudIndex
+        ui->DicGLWidget->update();
+        ui->plainTextEdit->appendPlainText(
+            systemTime() + " " + tr("Loft: 完成, %1 个三角面。")
+                .arg(static_cast<qulonglong>(reconstructed_mesh.polygons.size())));
+        return;
+    }
+
+    pcl::PolygonMesh reconstructed_mesh;
+    if (false)
+    {
+    }
+    else
+    {
+        const auto reconMethod = useNurbs ? Point_Algorithm::ReconMethod::Nurbs
+            : usePoisson ? Point_Algorithm::ReconMethod::Poisson
+            : Point_Algorithm::ReconMethod::Greedy;
+        reconstructed_mesh = Point_Algorithm::reconstructMesh(
+            selected_cloud, reconMethod, voxelLeafSize, maxSurfaceAngleDeg,
+            nurbsOrder, nurbsRefinement, nurbsResolution,
+            poissonDepth, poissonSolverDivide, poissonIsoDivide);
+    }
 
     if (reconstructed_mesh.polygons.empty()) {
         ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Surface reconstruction failed or produced an empty mesh."));
@@ -6795,30 +6959,34 @@ void MainWindow::on_reconstructSurface_clicked()
         }
     }
 
-    // ---------- 4. 裁剪越界三角面片 ----------
-    // Poisson 生成水密网格超出点云边界 → 负容差收缩包围盒来裁掉越界部分
-    // Greedy 只在有点的区域三角化 → 正容差保护边界三角不被误裁
+    // 蒙皮网格本身就是有序规整的四边形网格，裁剪/精简会破坏其结构，故跳过。
+    if (!useLoft)
     {
-        const float clipMargin = usePoisson ? -0.05f : 0.03f;
-        Point_Algorithm::clipMeshToCloudBounds(reconstructed_mesh, selected_cloud, clipMargin);
-    }
-    if(reconstructed_mesh.polygons.empty()) {
-        ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("All triangles clipped — reconstruction result empty."));
-        return;
-    }
-
-    // ---------- 4.5 精简到 ≤3000 面 ----------
-    {
-        const int nBefore = static_cast<int>(reconstructed_mesh.polygons.size());
-        Point_Algorithm::decimateMesh(reconstructed_mesh, 3000);
+        // ---------- 4. 裁剪越界三角面片 ----------
+        // Poisson 生成水密网格超出点云边界 → 负容差收缩包围盒来裁掉越界部分
+        // Greedy 只在有点的区域三角化 → 正容差保护边界三角不被误裁
+        {
+            const float clipMargin = usePoisson ? -0.05f : 0.03f;
+            Point_Algorithm::clipMeshToCloudBounds(reconstructed_mesh, selected_cloud, clipMargin);
+        }
         if(reconstructed_mesh.polygons.empty()) {
-            ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Decimation produced empty mesh."));
+            ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("All triangles clipped — reconstruction result empty."));
             return;
         }
-        const int nAfter = static_cast<int>(reconstructed_mesh.polygons.size());
-        if (nBefore != nAfter) {
-            ui->plainTextEdit->appendPlainText(
-                systemTime() + " " + tr("Mesh decimated: %1 → %2 faces.").arg(nBefore).arg(nAfter));
+
+        // ---------- 4.5 精简到 ≤3000 面 ----------
+        {
+            const int nBefore = static_cast<int>(reconstructed_mesh.polygons.size());
+            Point_Algorithm::decimateMesh(reconstructed_mesh, 3000);
+            if(reconstructed_mesh.polygons.empty()) {
+                ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Decimation produced empty mesh."));
+                return;
+            }
+            const int nAfter = static_cast<int>(reconstructed_mesh.polygons.size());
+            if (nBefore != nAfter) {
+                ui->plainTextEdit->appendPlainText(
+                    systemTime() + " " + tr("Mesh decimated: %1 → %2 faces.").arg(nBefore).arg(nAfter));
+            }
         }
     }
 
@@ -6881,7 +7049,8 @@ void MainWindow::on_reconstructSurface_clicked()
     const int reconstructionMeshIndex = ui->DicGLWidget->addMesh(reconstructed_mesh);
     if(reconstructionMeshIndex >= 0)
         ui->DicGLWidget->setMeshDisplayTag(reconstructionMeshIndex,
-            useNurbs ? QStringLiteral("reconstruction_nurbs")
+            useLoft ? QStringLiteral("reconstruction_loft")
+                : useNurbs ? QStringLiteral("reconstruction_nurbs")
                 : usePoisson ? QStringLiteral("reconstruction_poisson")
                 : QStringLiteral("reconstruction"));
 

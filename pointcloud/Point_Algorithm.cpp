@@ -22,11 +22,13 @@
 
 #include <array>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <random>
 #include <chrono>
 #include <Eigen/SVD>
+#include <Eigen/Eigenvalues>
 
 namespace {
 
@@ -1747,5 +1749,807 @@ PCLMesh Point_Algorithm::reconstructMesh(const PCLCloud::Ptr& input, ReconMethod
         std::cout << "Greedy reconstruction done, adaptive radius = " << triangulationRadius << std::endl;
     }
 
+    return output;
+}
+
+std::vector<Eigen::Vector3f> Point_Algorithm::orderAndResampleSection(
+    const PCLCloud::Ptr& section, int nSamples,
+    const Eigen::Vector3f& refChord, const Eigen::Vector3f& refThick)
+{
+    std::vector<Eigen::Vector3f> result;
+    if(!section || section->size() < 3 || nSamples < 2)
+        return result;
+
+    const int n = static_cast<int>(section->size());
+
+    std::vector<Eigen::Vector3f> pts;
+    pts.reserve(n);
+    for(const auto& p : section->points)
+        pts.emplace_back(p.x, p.y, p.z);
+
+    Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
+    for(const auto& p : pts) centroid += p;
+    centroid /= static_cast<float>(n);
+
+    // --- 1. 截面平面 2D 基底 (u=弦向, v=厚度向) ---
+    // 优先用外部传入的共用基底（保证各截面绕行方向一致，避免拧麻花）；否则本截面 PCA。
+    Eigen::Vector3f u, v;
+    if(refChord.norm() > 1e-6f && refThick.norm() > 1e-6f)
+    {
+        u = refChord.normalized();
+        v = (refThick - refThick.dot(u) * u).normalized(); // 对 u 正交化
+    }
+    else
+    {
+        Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+        for(const auto& p : pts) { Eigen::Vector3f d = p - centroid; cov += d * d.transpose(); }
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> es(cov);
+        u = es.eigenvectors().col(2).normalized(); // 最大方差 = 弦向
+        v = es.eigenvectors().col(1).normalized(); // 次方向 = 厚度向
+    }
+
+    // --- 2. 上下表面分离排序(翼型专用,避免极角排序在薄翼时上下点交替混杂) ---
+    // 投影到截面 (u,v) 平面:(chord, thickness) = (d·u, d·v)
+    struct Pt2D { int idx; float chord, thick; };
+    std::vector<Pt2D> pts2d;
+    pts2d.reserve(n);
+    for(int i = 0; i < n; ++i)
+    {
+        const Eigen::Vector3f d = pts[i] - centroid;
+        pts2d.push_back({ i, d.dot(u), d.dot(v) });
+    }
+
+    // 找前/后缘(弦向极值)
+    auto cmpChord = [](const Pt2D& a, const Pt2D& b){ return a.chord < b.chord; };
+    const float minChord = std::min_element(pts2d.begin(), pts2d.end(), cmpChord)->chord;
+    const float maxChord = std::max_element(pts2d.begin(), pts2d.end(), cmpChord)->chord;
+    const float midChord = (minChord + maxChord) * 0.5f;
+
+    // 上下表面分离 + 弦向排序
+    std::vector<Pt2D> upper, lower;
+    for(const auto& p : pts2d)
+    {
+        if(p.thick >= 0.0f)
+            upper.push_back(p);
+        else
+            lower.push_back(p);
+    }
+    // 上表面:弦向从大到小(后缘→前缘),下表面:弦向从小到大(前缘→后缘)
+    std::sort(upper.begin(), upper.end(), [](const Pt2D& a, const Pt2D& b){ return a.chord > b.chord; });
+    std::sort(lower.begin(), lower.end(), [](const Pt2D& a, const Pt2D& b){ return a.chord < b.chord; });
+
+    // 拼接闭合轮廓:后缘(upper首) → 上表面 → 前缘 → 下表面 → 回后缘
+    // (前后缘附近可能上下都有点,按 chord 距离分配给最近端)
+    std::vector<int> contour;
+    contour.reserve(n);
+    for(const auto& p : upper) contour.push_back(p.idx);
+    for(const auto& p : lower) contour.push_back(p.idx);
+
+    // --- 3. 闭合轮廓(首点补到末尾),累积弧长归一化,线性插值重采样 ---
+    std::vector<Eigen::Vector3f> loop;
+    loop.reserve(contour.size() + 1);
+    for(int idx : contour) loop.push_back(pts[idx]);
+    loop.push_back(loop.front()); // 闭合
+
+    const int m = static_cast<int>(loop.size());
+    std::vector<float> s(m, 0.0f);
+    for(int i = 1; i < m; ++i)
+        s[i] = s[i - 1] + (loop[i] - loop[i - 1]).norm();
+    if(s[m - 1] <= 1e-9f)
+        return result; // 退化：所有点重合
+    for(int i = 0; i < m; ++i) s[i] /= s[m - 1];
+
+    result.resize(nSamples);
+    for(int k = 0; k < nSamples; ++k)
+    {
+        const float sq = static_cast<float>(k) / static_cast<float>(nSamples - 1);
+        int seg = 0;
+        while(seg < m - 2 && s[seg + 1] < sq) ++seg;
+        const float denom = std::max(s[seg + 1] - s[seg], 1e-9f);
+        const float t = (sq - s[seg]) / denom;
+        result[k] = loop[seg] * (1.0f - t) + loop[seg + 1] * t;
+    }
+    return result;
+}
+
+// ========== 方案二：用中弧线把截面分成上/下两个面，各自插值（开放曲线，不闭合）==========
+bool Point_Algorithm::separateBladeSurfaces(
+    const PCLCloud::Ptr& section, int nInterp,
+    PCLCloud::Ptr& upperOut, PCLCloud::Ptr& lowerOut,
+    Eigen::Vector3f* refU, Eigen::Vector3f* refV)
+{
+    upperOut.reset(new PCLCloud);
+    lowerOut.reset(new PCLCloud);
+    if(!section || section->size() < 10 || nInterp < 2)
+        return false;
+
+    const int n = static_cast<int>(section->size());
+    std::vector<Eigen::Vector3f> pts;
+    pts.reserve(n);
+    for(const auto& p : section->points)
+        pts.emplace_back(p.x, p.y, p.z);
+
+    // --- 1. PCA 求截面平面基底：u=弦向(最大方差), v=厚度向(次方差) ---
+    Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
+    for(const auto& p : pts) centroid += p;
+    centroid /= static_cast<float>(n);
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for(const auto& p : pts)
+    { Eigen::Vector3f d = p - centroid; cov += d * d.transpose(); }
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> es(cov);
+    Eigen::Vector3f u = es.eigenvectors().col(2).normalized();
+    Eigen::Vector3f v = es.eigenvectors().col(1).normalized();
+
+    // 多截面对齐：若给了参考方向且已初始化，则翻转本截面 u/v 使符号一致，
+    // 避免相邻截面因 PCA 特征向量方向任意而互换 LE/TE 或上下面，导致 mesh 螺旋扭曲。
+    if(refU && refU->squaredNorm() > 1e-6f && u.dot(*refU) < 0.0f)
+        u = -u;
+    if(refV && refV->squaredNorm() > 1e-6f && v.dot(*refV) < 0.0f)
+        v = -v;
+    // 写回本截面实际方向，供下一截面参考
+    if(refU) *refU = u;
+    if(refV) *refV = v;
+
+    // 投影到 (s=弦向, t=厚度向)
+    std::vector<float> S(n), T(n);
+    float sMin = std::numeric_limits<float>::max(), sMax = -sMin;
+    for(int i = 0; i < n; ++i)
+    {
+        const Eigen::Vector3f d = pts[i] - centroid;
+        S[i] = d.dot(u);
+        T[i] = d.dot(v);
+        sMin = std::min(sMin, S[i]);
+        sMax = std::max(sMax, S[i]);
+    }
+    const float sSpan = std::max(sMax - sMin, 1e-6f);
+
+    // --- 2. 沿弦向分箱，估中弧线：每箱取厚度的几何中点 (min+max)/2 ---
+    // 用中点而非均值：均值会被点多的一面带偏，中点是上下表面的几何中线，分面更准。
+    const int nBins = std::max(10, std::min(60, n / 8));
+    std::vector<float> binMin(nBins,  std::numeric_limits<float>::max());
+    std::vector<float> binMax(nBins, -std::numeric_limits<float>::max());
+    std::vector<int> binCnt(nBins, 0);
+    auto binOf = [&](float s){
+        int b = static_cast<int>((s - sMin) / sSpan * nBins);
+        return std::max(0, std::min(nBins - 1, b));
+    };
+    for(int i = 0; i < n; ++i)
+    {
+        const int b = binOf(S[i]);
+        binMin[b] = std::min(binMin[b], T[i]);
+        binMax[b] = std::max(binMax[b], T[i]);
+        binCnt[b] += 1;
+    }
+    // 填补空箱 + 得到中弧线采样
+    std::vector<float> camber(nBins, 0.0f);
+    for(int b = 0; b < nBins; ++b)
+        camber[b] = binCnt[b] > 0 ? 0.5f * (binMin[b] + binMax[b]) : 0.0f;
+    for(int b = 0; b < nBins; ++b)
+        if(binCnt[b] == 0)
+        {
+            int l = b, r = b;
+            while(l >= 0 && binCnt[l] == 0) --l;
+            while(r < nBins && binCnt[r] == 0) ++r;
+            if(l < 0 && r < nBins) camber[b] = camber[r];
+            else if(r >= nBins && l >= 0) camber[b] = camber[l];
+            else if(l >= 0 && r < nBins) camber[b] = 0.5f * (camber[l] + camber[r]);
+        }
+
+    auto camberAt = [&](float s){
+        const float f = (s - sMin) / sSpan * (nBins - 1);
+        int b0 = static_cast<int>(f);
+        b0 = std::max(0, std::min(nBins - 2, b0));
+        const float lt = f - b0;
+        return camber[b0] * (1.0f - lt) + camber[b0 + 1] * lt;
+    };
+
+    // --- 3. 按中弧线精分上下表面：t > camber(s) → 上表面, 否则下表面 ---
+    std::vector<std::pair<float,int>> up, lo; // (s, idx)
+    up.reserve(n); lo.reserve(n);
+    for(int i = 0; i < n; ++i)
+    {
+        if(T[i] >= camberAt(S[i])) up.emplace_back(S[i], i);
+        else                       lo.emplace_back(S[i], i);
+    }
+    if(up.size() < 2 || lo.size() < 2)
+        return false;
+    std::sort(up.begin(), up.end(),
+        [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first < b.first; });
+    std::sort(lo.begin(), lo.end(),
+        [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first < b.first; });
+
+    // --- 4. 清洗每个面的折线（去离群 + 平滑），返回有序 3D 点列 ---
+    auto cleanPoly = [&](const std::vector<std::pair<float,int>>& seq){
+        std::vector<Eigen::Vector3f> poly;
+        poly.reserve(seq.size());
+        for(const auto& e : seq) poly.push_back(pts[e.second]);
+
+        // 离群剔除：沿排序折线，段长远超中位数的点判为噪点丢弃(避免插值画长飞线)
+        if(poly.size() >= 5)
+        {
+            std::vector<float> seg;
+            seg.reserve(poly.size() - 1);
+            for(size_t i = 1; i < poly.size(); ++i)
+                seg.push_back((poly[i] - poly[i - 1]).norm());
+            std::vector<float> sorted = seg;
+            std::sort(sorted.begin(), sorted.end());
+            const float medSeg = sorted[sorted.size() / 2];
+            const float thr = std::max(medSeg * 4.0f, 1e-6f); // 阈值=4倍中位段长
+
+            std::vector<Eigen::Vector3f> kept;
+            kept.reserve(poly.size());
+            // 端点修剪：首/末点若与相邻点距离异常大，视为离群丢弃
+            const size_t iBeg = ((poly[1] - poly[0]).norm() > thr) ? 1 : 0;
+            const size_t iEnd = ((poly[poly.size()-1] - poly[poly.size()-2]).norm() > thr)
+                                ? poly.size() - 1 : poly.size();
+            kept.push_back(poly[iBeg]);
+            for(size_t i = iBeg + 1; i + 1 < iEnd; ++i)
+            {
+                // 该点前后两段都异常长 → 孤立离群点，丢弃
+                const float dPrev = (poly[i] - poly[i - 1]).norm();
+                const float dNext = (poly[i + 1] - poly[i]).norm();
+                if(dPrev > thr && dNext > thr) continue;
+                kept.push_back(poly[i]);
+            }
+            if(iEnd - 1 > iBeg) kept.push_back(poly[iEnd - 1]);
+            poly.swap(kept);
+        }
+
+        // 移动平均平滑：抑制原始点噪声(半窗 w)，端点保持不动
+        if(poly.size() >= 5)
+        {
+            const int w = 2;
+            std::vector<Eigen::Vector3f> sm = poly;
+            for(int i = w; i < static_cast<int>(poly.size()) - w; ++i)
+            {
+                Eigen::Vector3f acc = Eigen::Vector3f::Zero();
+                for(int j = -w; j <= w; ++j) acc += poly[i + j];
+                sm[i] = acc / static_cast<float>(2 * w + 1);
+            }
+            poly.swap(sm);
+        }
+        return poly;
+    };
+    std::vector<Eigen::Vector3f> polyUp = cleanPoly(up); // s: 小(LE)→大(TE)
+    std::vector<Eigen::Vector3f> polyLo = cleanPoly(lo);
+    if(polyUp.size() < 3 || polyLo.size() < 3) return false;
+
+    // --- 5. 前后缘平滑汇聚：用圆弧拟合边缘区域，实现平滑过渡 ---
+    auto to2D = [&](const Eigen::Vector3f& p){
+        const Eigen::Vector3f d = p - centroid;
+        return Eigen::Vector2f(d.dot(u), d.dot(v));
+    };
+    auto to3D = [&](const Eigen::Vector2f& q){ return centroid + q.x() * u + q.y() * v; };
+
+    // Kåsa 2D 圆拟合
+    auto fitCircle2D = [](const std::vector<Eigen::Vector2f>& pts,
+                          Eigen::Vector2f& c, float& r)->bool{
+        const int m = static_cast<int>(pts.size());
+        if(m < 3) return false;
+        Eigen::MatrixXf M(m, 3); Eigen::VectorXf b(m);
+        for(int i = 0; i < m; ++i)
+        { M(i,0)=2*pts[i].x(); M(i,1)=2*pts[i].y(); M(i,2)=1; b(i)=pts[i].squaredNorm(); }
+        Eigen::Vector3f s = M.colPivHouseholderQr().solve(b);
+        c = Eigen::Vector2f(s.x(), s.y());
+        const float r2 = s.z() + c.squaredNorm();
+        if(r2 <= 1e-9f) return false;
+        r = std::sqrt(r2); return true;
+    };
+
+    // 对一端边缘进行圆弧平滑：取两面靠该端的点拟合圆，用圆弧点替换
+    auto smoothEdge = [&](bool atLE){
+        const int kEdge = std::min(8, static_cast<int>(std::min(polyUp.size(), polyLo.size())) / 3);
+        if(kEdge < 3) return;
+
+        std::vector<Eigen::Vector2f> nb2d;
+        std::vector<int> idxUp, idxLo;  // 记录用了哪些索引
+        for(int i = 0; i < kEdge; ++i) {
+            const int idx = atLE ? i : (static_cast<int>(polyUp.size()) - 1 - i);
+            nb2d.push_back(to2D(polyUp[idx]));
+            idxUp.push_back(idx);
+        }
+        for(int i = 0; i < kEdge; ++i) {
+            const int idx = atLE ? i : (static_cast<int>(polyLo.size()) - 1 - i);
+            nb2d.push_back(to2D(polyLo[idx]));
+            idxLo.push_back(idx);
+        }
+
+        Eigen::Vector2f c; float r;
+        if(!fitCircle2D(nb2d, c, r) || r > sSpan * 0.5f) return;
+
+        // 找到拟合圆在弦向上的极值点作为共同尖端
+        const Eigen::Vector2f tip2d(atLE ? (c.x() - r) : (c.x() + r), c.y());
+        const Eigen::Vector3f tip3d = to3D(tip2d);
+
+        // 将两个面靠该端的点投影到拟合圆上，实现平滑
+        for(int i = 0; i < kEdge; ++i) {
+            const Eigen::Vector2f p = to2D(polyUp[idxUp[i]]);
+            const Eigen::Vector2f dir = (p - c).normalized();
+            const Eigen::Vector2f pOnCircle = c + dir * r;
+            polyUp[idxUp[i]] = to3D(pOnCircle);
+        }
+        for(int i = 0; i < kEdge; ++i) {
+            const Eigen::Vector2f p = to2D(polyLo[idxLo[i]]);
+            const Eigen::Vector2f dir = (p - c).normalized();
+            const Eigen::Vector2f pOnCircle = c + dir * r;
+            polyLo[idxLo[i]] = to3D(pOnCircle);
+        }
+
+        // 端点强制汇聚到共同尖端
+        polyUp[atLE ? 0 : polyUp.size()-1] = tip3d;
+        polyLo[atLE ? 0 : polyLo.size()-1] = tip3d;
+    };
+
+    smoothEdge(true);   // 前缘 LE 平滑
+    smoothEdge(false);  // 后缘 TE 平滑
+
+    // --- 6. 每个面沿弧长等间隔重采样成开放曲线 ---
+    auto resampleOut = [&](const std::vector<Eigen::Vector3f>& poly, PCLCloud::Ptr& out){
+        std::vector<float> cum(poly.size(), 0.0f);
+        for(size_t i = 1; i < poly.size(); ++i)
+            cum[i] = cum[i - 1] + (poly[i] - poly[i - 1]).norm();
+        const float total = cum.back();
+        if(total < 1e-6f) return;
+        for(int k = 0; k < nInterp; ++k)
+        {
+            const float target = static_cast<float>(k) / static_cast<float>(nInterp - 1) * total;
+            auto it = std::lower_bound(cum.begin(), cum.end(), target);
+            int idx = static_cast<int>(it - cum.begin());
+            if(idx <= 0) idx = 1;
+            if(idx >= static_cast<int>(poly.size())) idx = static_cast<int>(poly.size()) - 1;
+            const float segLen = cum[idx] - cum[idx - 1];
+            const float localT = segLen > 1e-9f ? (target - cum[idx - 1]) / segLen : 0.0f;
+            const Eigen::Vector3f p = poly[idx - 1] * (1.0f - localT) + poly[idx] * localT;
+            out->points.emplace_back(p.x(), p.y(), p.z());
+        }
+        out->width = static_cast<uint32_t>(out->points.size());
+        out->height = 1;
+    };
+    resampleOut(polyUp, upperOut);
+    resampleOut(polyLo, lowerOut);
+
+    std::cout << "separateBladeSurfaces: " << n << " → upper " << upperOut->size()
+              << " / lower " << lowerOut->size() << " (smooth edges)" << std::endl;
+    return !upperOut->empty() && !lowerOut->empty();
+}
+
+// ========== 任务1：弦向切片重采样（基于几何特征，统一点数和分布）==========
+PCLCloud::Ptr Point_Algorithm::resampleSectionByChordSlicing(
+    const PCLCloud::Ptr& section, int nSlices)
+{
+    PCLCloud::Ptr result(new PCLCloud);
+    if(!section || section->size() < 10 || nSlices < 5)
+        return result;
+
+    const int n = static_cast<int>(section->size());
+
+    // --- 1. 粗排序：按绕质心极角排序，形成闭合轮廓 ---
+    std::vector<Eigen::Vector3f> pts;
+    pts.reserve(n);
+    for(const auto& p : section->points)
+        pts.emplace_back(p.x, p.y, p.z);
+
+    Eigen::Vector3f centroid = Eigen::Vector3f::Zero();
+    for(const auto& p : pts) centroid += p;
+    centroid /= static_cast<float>(n);
+
+    // PCA 求截面平面基底(u=弦向,v=厚度向)
+    Eigen::Matrix3f cov = Eigen::Matrix3f::Zero();
+    for(const auto& p : pts)
+    { Eigen::Vector3f d = p - centroid; cov += d * d.transpose(); }
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3f> es(cov);
+    Eigen::Vector3f u = es.eigenvectors().col(2).normalized();
+    Eigen::Vector3f v = es.eigenvectors().col(1).normalized();
+
+    // 弦向上下表面拆分排序（消除最近邻/极角排序在薄叶型上的跨表面跳跃）：
+    //   1) 每个点投影到 (弦向s, 厚度t)
+    //   2) 按 t 的符号分上/下表面
+    //   3) 上/下各自按 s 单调排序
+    //   4) 拼成闭合轮廓：下表面(s增) → 上表面(s减)，首尾即两个端部，不自交
+    std::vector<std::pair<float,int>> upper, lower; // (s, idx)
+    upper.reserve(n); lower.reserve(n);
+    for(int i = 0; i < n; ++i)
+    {
+        const Eigen::Vector3f d = pts[i] - centroid;
+        const float s = d.dot(u);
+        const float t = d.dot(v);
+        if(t >= 0.0f) upper.emplace_back(s, i);
+        else          lower.emplace_back(s, i);
+    }
+    std::sort(lower.begin(), lower.end(),
+        [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first < b.first; });
+    std::sort(upper.begin(), upper.end(),
+        [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first > b.first; }); // s 递减
+
+    std::vector<Eigen::Vector3f> loop;
+    loop.reserve(n);
+    for(const auto& e : lower) loop.push_back(pts[e.second]); // 下表面 s: 小→大
+    for(const auto& e : upper) loop.push_back(pts[e.second]); // 上表面 s: 大→小
+    if(loop.size() < 3) return result;
+
+    // --- 2. 沿排序后的闭合轮廓等弧长插值，得到均匀分布的光滑曲线 ---
+    // nSlices 在调试阶段直接作为插值点数(可定制，如 10000)；先按段长累积，再等间隔取点。
+    const int nDense = std::max(50, nSlices);
+    std::vector<float> cum(loop.size() + 1, 0.0f); // 闭合：末点接回首点
+    for(size_t i = 1; i <= loop.size(); ++i)
+        cum[i] = cum[i - 1] + (loop[i % loop.size()] - loop[i - 1]).norm();
+    const float total = cum.back();
+    if(total < 1e-6f) return result;
+
+    for(int k = 0; k < nDense; ++k)
+    {
+        const float target = static_cast<float>(k) / static_cast<float>(nDense) * total;
+        auto it = std::lower_bound(cum.begin(), cum.end(), target);
+        int idx = static_cast<int>(it - cum.begin());
+        if(idx <= 0) idx = 1;
+        if(idx > static_cast<int>(loop.size())) idx = static_cast<int>(loop.size());
+        const float segLen = cum[idx] - cum[idx - 1];
+        const float localT = segLen > 1e-9f ? (target - cum[idx - 1]) / segLen : 0.0f;
+        const Eigen::Vector3f p =
+            loop[idx - 1] * (1.0f - localT) + loop[idx % loop.size()] * localT;
+        result->points.emplace_back(p.x(), p.y(), p.z());
+    }
+    result->width = static_cast<uint32_t>(result->points.size());
+    result->height = 1;
+
+    std::cout << "resampleSectionByChordSlicing(interp only): " << n << " → "
+              << result->size() << " points" << std::endl;
+    return result;
+
+    // ↓↓↓ 以下为后续步骤(圆拟合/拆弧/重采样)，当前调试阶段暂不执行 ↓↓↓
+#if 0
+    int idxLE = 0, idxTE = 0; // leading edge, trailing edge
+    float maxDist = 0.0f;
+    for(int i = 0; i < nDense; ++i)
+        for(int j = i + 1; j < nDense; ++j)
+        {
+            const float d = (dense[i] - dense[j]).norm();
+            if(d > maxDist) { maxDist = d; idxLE = i; idxTE = j; }
+        }
+    // 确保 TE(后缘) 在弦向 u 的正方向，LE(前缘) 在负方向
+    const Eigen::Vector3f pTE = dense[idxTE], pLE = dense[idxLE];
+    const Eigen::Vector3f chord0 = pTE - pLE;
+    if(chord0.dot(u) < 0.0f) { std::swap(idxLE, idxTE); } // 调整方向
+
+    // --- 2.5 曲率加强：最远两点只定大方向，在其附近小窗口找曲率最大点作更准尖端 ---
+    // Menger 曲率 = 4*Area / (|AB||BC||CA|)，用间隔 w 的三点算(避免相邻点数值噪声)。
+    auto mengerCurv = [&](int i, int w)->float{
+        const int ia = (i - w + nDense) % nDense;
+        const int ic = (i + w) % nDense;
+        const Eigen::Vector3f& A = dense[ia];
+        const Eigen::Vector3f& B = dense[i];
+        const Eigen::Vector3f& C = dense[ic];
+        const float a = (B - C).norm(), b = (A - C).norm(), c = (A - B).norm();
+        if(a * b * c < 1e-9f) return 0.0f;
+        const float area2 = ((B - A).cross(C - A)).norm(); // = 2*Area
+        return 2.0f * area2 / (a * b * c);
+    };
+    auto refineIdxByCurvature = [&](int idxRough)->int{
+        const int searchWin = std::max(5, nDense / 40);  // ±2.5% 曲线范围
+        const int w = std::max(2, nDense / 200);
+        int best = idxRough; float bestC = -1.0f;
+        for(int off = -searchWin; off <= searchWin; ++off)
+        {
+            const int i = (idxRough + off + nDense) % nDense;
+            const float cc = mengerCurv(i, w);
+            if(cc > bestC) { bestC = cc; best = i; }
+        }
+        return best;
+    };
+    idxTE = refineIdxByCurvature(idxTE);
+    idxLE = refineIdxByCurvature(idxLE);
+
+    Eigen::Vector3f vTE = dense[idxTE], vLE = dense[idxLE];       // 顶点(下面再用圆拟合修正)
+    const Eigen::Vector3f chordDir = (vTE - vLE).normalized();
+    const float chordLen = (vTE - vLE).norm();
+
+    std::cout << "  Chord: TE=" << vTE.transpose() << ", LE=" << vLE.transpose()
+              << ", length=" << chordLen << std::endl;
+
+    // --- 3.5 圆拟合补齐前后缘：高曲率区易丢点，取到的"最远点"不是真尖端 ---
+    // 在截面平面(u,v)内做 2D 圆拟合(Kåsa法)，沿弦向外推出真实尖端顶点。
+    auto to2D = [&](const Eigen::Vector3f& p){
+        const Eigen::Vector3f d = p - centroid;
+        return Eigen::Vector2f(d.dot(u), d.dot(v)); // (弦向, 厚度向)
+    };
+    auto to3D = [&](const Eigen::Vector2f& q){
+        return centroid + q.x() * u + q.y() * v;
+    };
+    // Kåsa 圆拟合：返回是否成功，输出圆心(2D)与半径
+    auto fitCircle2D = [](const std::vector<Eigen::Vector2f>& q,
+                          Eigen::Vector2f& center, float& radius)->bool{
+        const int m = static_cast<int>(q.size());
+        if(m < 3) return false;
+        // 解 [2x 2y 1][A B C]^T = x^2+y^2 的最小二乘
+        Eigen::MatrixXf M(m, 3);
+        Eigen::VectorXf b(m);
+        for(int i = 0; i < m; ++i)
+        {
+            M(i,0) = 2.0f * q[i].x();
+            M(i,1) = 2.0f * q[i].y();
+            M(i,2) = 1.0f;
+            b(i) = q[i].x()*q[i].x() + q[i].y()*q[i].y();
+        }
+        Eigen::Vector3f sol = M.colPivHouseholderQr().solve(b);
+        center = Eigen::Vector2f(sol.x(), sol.y());
+        const float r2 = sol.z() + center.squaredNorm();
+        if(r2 <= 1e-9f) return false;
+        radius = std::sqrt(r2);
+        return true;
+    };
+
+    const Eigen::Vector2f cd2 = Eigen::Vector2f((vTE - vLE).dot(u), (vTE - vLE).dot(v)).normalized();
+    const int kEdge = 7; // 只取尖端最近的 7 个高曲率点做圆拟合(多则不准)
+
+    // 取距 tipRough 最近的 kEdge 个原始点做圆拟合，沿 outDir 外推出真实尖端(2D)
+    auto refineTip = [&](const Eigen::Vector3f& tipRough, const Eigen::Vector2f& outDir,
+                         Eigen::Vector3f& tipOut)->bool{
+        // 按到粗尖端距离排序，取最近 kEdge 个
+        std::vector<std::pair<float,int>> ds;
+        ds.reserve(pts.size());
+        for(int i = 0; i < static_cast<int>(pts.size()); ++i)
+            ds.emplace_back((pts[i] - tipRough).squaredNorm(), i);
+        const int k = std::min(kEdge, static_cast<int>(ds.size()));
+        std::partial_sort(ds.begin(), ds.begin() + k, ds.end());
+        std::vector<Eigen::Vector2f> nb;
+        nb.reserve(k);
+        for(int i = 0; i < k; ++i) nb.push_back(to2D(pts[ds[i].second]));
+
+        Eigen::Vector2f c; float r;
+        if(!fitCircle2D(nb, c, r)) return false;
+        if(r > chordLen) return false;                 // 拟合发散，弃用
+        tipOut = to3D(c + outDir * r);                 // 圆心沿外法向推 r → 尖端
+        return true;
+    };
+
+    Eigen::Vector3f tipTE, tipLE;
+    const bool okTE = refineTip(vTE,  cd2, tipTE);     // 后缘：弦向正方向外推
+    const bool okLE = refineTip(vLE, -cd2, tipLE);     // 前缘：弦向负方向外推
+    if(okTE) { vTE = tipTE; dense[idxTE] = tipTE; std::cout << "  TE refined by circle fit\n"; }
+    if(okLE) { vLE = tipLE; dense[idxLE] = tipLE; std::cout << "  LE refined by circle fit\n"; }
+
+    // --- 4. 以 TE/LE 为界，把闭合曲线拆成上下两条弧，再对每条弧等弧长重采样 ---
+    // 关键：在连续插值曲线上重采样，每个站位必出一个点，点数恒为 nSlices，绝不会空。
+    auto buildArc = [&](int from, int to) {
+        std::vector<Eigen::Vector3f> arc;
+        int i = from;
+        arc.push_back(dense[i]);
+        while(i != to) { i = (i + 1) % nDense; arc.push_back(dense[i]); }
+        return arc;
+    };
+    std::vector<Eigen::Vector3f> arcA = buildArc(idxTE, idxLE); // TE→LE
+    std::vector<Eigen::Vector3f> arcB = buildArc(idxLE, idxTE); // LE→TE
+
+    // 等弧长重采样：在弧内部取 m 个点（不含两端顶点）
+    auto resampleArcInterior = [](const std::vector<Eigen::Vector3f>& arc, int m) {
+        std::vector<Eigen::Vector3f> out;
+        if(arc.size() < 2 || m <= 0) return out;
+        std::vector<float> cum(arc.size(), 0.0f);
+        for(size_t i = 1; i < arc.size(); ++i)
+            cum[i] = cum[i - 1] + (arc[i] - arc[i - 1]).norm();
+        const float total = cum.back();
+        if(total < 1e-9f) return out;
+        out.reserve(m);
+        for(int s = 0; s < m; ++s)
+        {
+            const float t = static_cast<float>(s + 1) / static_cast<float>(m + 1); // 内部站位
+            const float target = t * total;
+            auto it = std::lower_bound(cum.begin(), cum.end(), target);
+            int idx = static_cast<int>(it - cum.begin());
+            if(idx <= 0) idx = 1;
+            if(idx >= static_cast<int>(arc.size())) idx = static_cast<int>(arc.size()) - 1;
+            const float segLen = cum[idx] - cum[idx - 1];
+            const float localT = segLen > 1e-9f ? (target - cum[idx - 1]) / segLen : 0.0f;
+            out.push_back(arc[idx - 1] * (1.0f - localT) + arc[idx] * localT);
+        }
+        return out;
+    };
+
+    // 判定哪条弧是上表面（厚度方向正侧）
+    Eigen::Vector3f thickDir = v - v.dot(chordDir) * chordDir;
+    thickDir.normalize();
+    const float signA = (arcA[arcA.size() / 2] - vLE).dot(thickDir);
+
+    std::vector<Eigen::Vector3f> upperPts, lowerPts; // upper: TE→LE, lower: LE→TE
+    if(signA >= 0.0f)
+    {
+        upperPts = resampleArcInterior(arcA, nSlices);          // arcA(TE→LE) 是上表面
+        lowerPts = resampleArcInterior(arcB, nSlices);          // arcB(LE→TE) 是下表面
+    }
+    else
+    {
+        upperPts = resampleArcInterior(arcB, nSlices);          // arcB 是上表面(LE→TE)
+        std::reverse(upperPts.begin(), upperPts.end());         // 翻成 TE→LE
+        lowerPts = resampleArcInterior(arcA, nSlices);          // arcA 是下表面(TE→LE)
+        std::reverse(lowerPts.begin(), lowerPts.end());         // 翻成 LE→TE
+    }
+    if(static_cast<int>(upperPts.size()) != nSlices ||
+       static_cast<int>(lowerPts.size()) != nSlices)
+        return result; // 重采样失败，返回空
+
+    // --- 5. 组装最终输出：后缘顶点 + 上表面(TE→LE) + 前缘顶点 + 下表面(LE→TE) ---
+    result->points.reserve(static_cast<size_t>(nSlices) * 2 + 2);
+    result->points.emplace_back(vTE.x(), vTE.y(), vTE.z()); // 后缘顶点
+    for(const auto& p : upperPts)
+        result->points.emplace_back(p.x(), p.y(), p.z());
+    result->points.emplace_back(vLE.x(), vLE.y(), vLE.z()); // 前缘顶点
+    for(const auto& p : lowerPts)
+        result->points.emplace_back(p.x(), p.y(), p.z());
+
+    result->width = static_cast<uint32_t>(result->points.size());
+    result->height = 1;
+
+    std::cout << "resampleSectionByChordSlicing: " << n << " → " << result->size()
+              << " points (" << nSlices << " slices)" << std::endl;
+    return result;
+#endif
+}
+
+std::vector<PCLCloud::Ptr> Point_Algorithm::splitCloudIntoSections(const PCLCloud::Ptr& cloud)
+{
+    std::vector<PCLCloud::Ptr> sections;
+    if(!cloud || cloud->size() < 4)
+        return sections;
+
+    const int n = static_cast<int>(cloud->size());
+
+    // --- 1. 主轴方向：PCA 主成分（沿叶片展向，各截面沿此轴依次排开）---
+    const PCAResult pr = pcaAnalysis(cloud);
+    Eigen::Vector3f axis, centroid;
+    if(pr.success)
+    {
+        axis = pr.eigenvectors.col(0).normalized();
+        centroid = pr.centroid;
+    }
+    else
+    {
+        centroid = Eigen::Vector3f::Zero();
+        for(const auto& p : cloud->points) centroid += Eigen::Vector3f(p.x, p.y, p.z);
+        centroid /= static_cast<float>(n);
+        axis = Eigen::Vector3f::UnitX();
+    }
+
+    // --- 2. 全部点沿主轴投影，按投影值排序 ---
+    std::vector<std::pair<float,int>> proj(n); // (t, 原始索引)
+    for(int i = 0; i < n; ++i)
+    {
+        const auto& p = cloud->points[i];
+        proj[i] = { (Eigen::Vector3f(p.x, p.y, p.z) - centroid).dot(axis), i };
+    }
+    std::sort(proj.begin(), proj.end(),
+        [](const std::pair<float,int>& a, const std::pair<float,int>& b){ return a.first < b.first; });
+
+    const float span = std::max(proj.back().first - proj.front().first, 1e-6f);
+
+    // --- 3. 自适应间隙阈值：相邻投影差的中位数 × 系数，或 span 的 2%（取大者）---
+    std::vector<float> gaps;
+    gaps.reserve(n - 1);
+    for(int i = 1; i < n; ++i) gaps.push_back(proj[i].first - proj[i-1].first);
+    std::vector<float> sortedGaps = gaps;
+    std::sort(sortedGaps.begin(), sortedGaps.end());
+    const float medGap = sortedGaps.empty() ? 0.0f : sortedGaps[sortedGaps.size()/2];
+    const float gapThresh = std::max(medGap * 8.0f, span * 0.02f);
+
+    // --- 4. 在大于阈值的间隙处切段 ---
+    std::vector<PCLCloud::Ptr> raw;
+    PCLCloud::Ptr cur(new PCLCloud);
+    cur->points.push_back(cloud->points[proj[0].second]);
+    for(int i = 1; i < n; ++i)
+    {
+        if(gaps[i-1] > gapThresh)
+        {
+            raw.push_back(cur);
+            cur.reset(new PCLCloud);
+        }
+        cur->points.push_back(cloud->points[proj[i].second]);
+    }
+    raw.push_back(cur);
+
+    // --- 5. 过滤过小的段（噪声），保留点数 >=3 的截面 ---
+    for(auto& sec : raw)
+    {
+        if(sec->size() >= 3)
+        {
+            sec->width = static_cast<uint32_t>(sec->points.size());
+            sec->height = 1;
+            sections.push_back(sec);
+        }
+    }
+
+    std::cout << "splitCloudIntoSections: " << sections.size()
+              << " sections (gapThresh=" << gapThresh << ", span=" << span << ")" << std::endl;
+    return sections;
+}
+
+PCLMesh Point_Algorithm::loftReconstruction(
+    const std::vector<PCLCloud::Ptr>& sections, int nSamples)
+{
+    PCLMesh output;
+    if(sections.size() < 2)
+        return output;
+
+    // --- 使用新的 separateBladeSurfaces 方案：每截面分成上下面，合并成闭合环 ---
+    const int nInterpPerSurface = (nSamples > 0) ? nSamples : 1000;  // 每个面的插值点数
+
+    std::vector<std::vector<Eigen::Vector3f>> grid;
+    grid.reserve(sections.size());
+
+    // 参考方向：第一个成功的截面确定基准，后续截面对齐符号，避免螺旋扭曲
+    Eigen::Vector3f refU = Eigen::Vector3f::Zero();
+    Eigen::Vector3f refV = Eigen::Vector3f::Zero();
+
+    for(const auto& sec : sections)
+    {
+        if(!sec || sec->size() < 10) continue;
+
+        PCLCloud::Ptr upper, lower;
+        if(!separateBladeSurfaces(sec, nInterpPerSurface, upper, lower, &refU, &refV))
+            continue;
+        if(upper->size() != lower->size())
+            continue;
+
+        // 合并成闭合环：upper[0..n-1] + lower[n-2..1] (跳过 lower 两端，与 upper 共享)
+        std::vector<Eigen::Vector3f> ring;
+        ring.reserve(upper->size() + lower->size() - 2);
+
+        for(const auto& p : upper->points)
+            ring.emplace_back(p.x, p.y, p.z);
+
+        for(int i = static_cast<int>(lower->size()) - 2; i >= 1; --i)
+        {
+            const auto& p = lower->points[i];
+            ring.emplace_back(p.x, p.y, p.z);
+        }
+
+        grid.push_back(std::move(ring));
+    }
+
+    if(grid.size() < 2)
+    {
+        std::cout << "Loft: too few valid sections (< 2)." << std::endl;
+        return output;
+    }
+
+    // 检查所有环点数是否一致
+    const int nPerRow = static_cast<int>(grid[0].size());
+    for(size_t k = 0; k < grid.size(); ++k)
+    {
+        if(static_cast<int>(grid[k].size()) != nPerRow)
+        {
+            std::cout << "Loft: section " << k << " has " << grid[k].size()
+                      << " points, expected " << nPerRow << std::endl;
+            return output;
+        }
+    }
+
+    // --- 生成顶点：nSect 行 × nPerRow 列 ---
+    const int nSect = static_cast<int>(grid.size());
+    pcl::PointCloud<pcl::PointXYZ> verts;
+    verts.reserve(nSect * nPerRow);
+    for(int k = 0; k < nSect; ++k)
+        for(int j = 0; j < nPerRow; ++j)
+            verts.emplace_back(grid[k][j].x(), grid[k][j].y(), grid[k][j].z());
+    pcl::toPCLPointCloud2(verts, output.cloud);
+
+    // --- 蒙皮三角化：ring-to-ring ---
+    auto vidx = [nPerRow](int k, int j) { return k * nPerRow + (j % nPerRow); };
+    output.polygons.reserve(2 * (nSect - 1) * nPerRow);
+    for(int k = 0; k < nSect - 1; ++k)
+    {
+        for(int j = 0; j < nPerRow; ++j)
+        {
+            pcl::Vertices tri1;
+            tri1.vertices = { vidx(k, j), vidx(k + 1, j), vidx(k + 1, j + 1) };
+            output.polygons.push_back(tri1);
+
+            pcl::Vertices tri2;
+            tri2.vertices = { vidx(k, j), vidx(k + 1, j + 1), vidx(k, j + 1) };
+            output.polygons.push_back(tri2);
+        }
+    }
+
+    std::cout << "Loft reconstruction: " << nSect << " sections x "
+              << nPerRow << " points/section → " << output.polygons.size()
+              << " triangles" << std::endl;
     return output;
 }

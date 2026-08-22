@@ -3,6 +3,7 @@
 #include "icp_svd.h"
 #include <cuda_runtime.h>
 #include <Eigen/Dense>
+#include <pcl/common/transforms.h>
 #include <vector>
 #include <limits>
 #include <cmath>
@@ -15,7 +16,8 @@ ICPResult performICP(
     int max_iterations,
     float max_correspondence_distance,
     float transformation_epsilon,
-    float fitness_epsilon)
+    float fitness_epsilon,
+    bool enable_centroid_prealign)
 {
     ICPResult result;
     result.transformation = Eigen::Matrix4f::Identity();
@@ -26,7 +28,42 @@ ICPResult performICP(
     if(!source || !target || source->empty() || target->empty())
         return result;
 
-    int source_size = static_cast<int>(source->size());
+    // 质心预对齐：把 source 的质心移到 target 的质心，消除大位移
+    Eigen::Matrix4f centroid_transform = Eigen::Matrix4f::Identity();
+    pcl::PointCloud<pcl::PointXYZ>::Ptr source_prealigned = source;
+
+    if(enable_centroid_prealign)
+    {
+        // 计算两片点云的质心
+        Eigen::Vector4f src_centroid(0, 0, 0, 0);
+        Eigen::Vector4f tgt_centroid(0, 0, 0, 0);
+
+        for(const auto& pt : source->points)
+        {
+            src_centroid[0] += pt.x;
+            src_centroid[1] += pt.y;
+            src_centroid[2] += pt.z;
+        }
+        src_centroid /= static_cast<float>(source->size());
+
+        for(const auto& pt : target->points)
+        {
+            tgt_centroid[0] += pt.x;
+            tgt_centroid[1] += pt.y;
+            tgt_centroid[2] += pt.z;
+        }
+        tgt_centroid /= static_cast<float>(target->size());
+
+        // 构造平移矩阵：src_centroid -> tgt_centroid
+        Eigen::Vector3f translation = tgt_centroid.head<3>() - src_centroid.head<3>();
+        centroid_transform.block<3, 1>(0, 3) = translation;
+
+        // 应用预对齐变换
+        source_prealigned.reset(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::transformPointCloud(*source, *source_prealigned, centroid_transform);
+    }
+
+    int source_size = static_cast<int>(source_prealigned->size());
     int target_size = static_cast<int>(target->size());
 
     // 分配 GPU 内存
@@ -41,15 +78,15 @@ ICPResult performICP(
     cudaMalloc(&d_distances, source_size * sizeof(float));
     cudaMalloc(&d_transform, 16 * sizeof(float));
 
-    // 拷贝源点云到 GPU
+    // 拷贝源点云到 GPU（使用预对齐后的点云）
     std::vector<ICP_Point3D> h_source(source_size);
     std::vector<ICP_Point3D> h_target(target_size);
 
     for(int i = 0; i < source_size; ++i)
     {
-        h_source[i].x = source->points[i].x;
-        h_source[i].y = source->points[i].y;
-        h_source[i].z = source->points[i].z;
+        h_source[i].x = source_prealigned->points[i].x;
+        h_source[i].y = source_prealigned->points[i].y;
+        h_source[i].z = source_prealigned->points[i].z;
     }
     for(int i = 0; i < target_size; ++i)
     {
@@ -196,7 +233,9 @@ ICPResult performICP(
         result.fitness_score = fitness;
     }
 
-    result.transformation = cumulative_transform;
+    // 合成最终变换：先质心对齐，再 ICP 微调
+    // 即 T_final = T_icp * T_centroid，使得 T_final * source = aligned
+    result.transformation = cumulative_transform * centroid_transform;
 
     // 清理 GPU 内存
     cudaFree(d_source);

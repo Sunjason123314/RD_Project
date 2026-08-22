@@ -1,8 +1,12 @@
 # Git 使用指南 — blade_measurement 项目
 
 > 面向**完全没用过 Git 的新手**。从「装软件、建仓库」讲起，一直到「日常提交、下载、更新」。
-> 更新时间：2026-07-18　远程平台：GitHub（私有仓库）
-> 远程地址：`https://github.com/Sunjason123314/blade_measurement.git`
+> 更新时间：2026-07-24　远程平台：GitHub
+> 远程地址（本项目关联了两个仓库）：
+> - `origin` → `https://github.com/HIT-Visual-Measurement-Research-Group/Auto-Measurement.git`（研究组仓库）
+> - `blade`  → `https://github.com/Sunjason123314/blade_measurement.git`（个人仓库）
+>
+> ⚠️ 本地分支名是 `master`，两个远程的分支名都是 `main`，名字不一样，**推送必须写成 `HEAD:main`**（见速查表与第 9 节）。
 
 ---
 
@@ -13,14 +17,18 @@
 
 | 我想做什么 | 命令 |
 |---|---|
-| 改了几个文件，全部上传 | `git add -A` → `git commit -m "说明"` → `git push` |
-| 只上传其中一部分 | `git add 文件名` → `git commit -m "说明"` → `git push` |
+| 改了几个文件，全部上传 | `git add -A` → `git commit -m "说明"` → `git push origin HEAD:main` → `git push blade HEAD:main` |
+| 只上传其中一部分 | `git add 文件名` → `git commit -m "说明"` → `git push origin HEAD:main` → `git push blade HEAD:main` |
+| 只推研究组仓库 | `git push origin HEAD:main` |
+| 只推个人仓库 | `git push blade HEAD:main` |
 | 换电脑第一次下载 | `git clone https://github.com/Sunjason123314/blade_measurement.git` |
-| 同步 GitHub 最新版 | `git pull` |
+| 同步 GitHub 最新版 | `git pull origin main` |
 | 看当前状态 | `git status` |
 | 看提交历史 | `git log --oneline` |
+| 确认本地与两远程是否一致 | `git fetch --all` → `git rev-parse --short HEAD origin/main blade/main`（三个 hash 相同即同步成功）|
 
 核心心法：**改动不会自动进历史**。永远是三步 —— `add`（选要提交的）→ `commit`（存快照）→ `push`（传上去）。
+本项目要推**两个**仓库，所以 `push` 那步跑两条（`origin` 和 `blade` 各一次）。
 
 ---
 
@@ -279,5 +287,85 @@ GitHub → Settings → Developer settings → Personal access tokens → 勾 `r
 git rm -r --cached build/
 git commit -m "清理：移除误提交的 build 目录"
 ```
+
+---
+
+## 9. 本项目特殊情况：两个远程仓库 + 分支名不一致（重要）
+
+本项目和普通教程有两点不同，日常推送必须记住：
+
+### 9.1 关联了两个远程仓库
+
+用 `git remote -v` 查看，会看到两个：
+```
+origin  https://github.com/HIT-Visual-Measurement-Research-Group/Auto-Measurement.git   ← 研究组
+blade   https://github.com/Sunjason123314/blade_measurement.git                          ← 个人
+```
+所以每次推送要**推两次**，两个仓库才都更新：
+```bash
+git push origin HEAD:main
+git push blade  HEAD:main
+```
+
+> 如果只想推其中一个，就只跑对应那一条。
+
+### 9.2 本地分支叫 `master`，远程叫 `main`（名字不一样！）
+
+用 `git branch` 看，本地当前分支是 `* master`；而 GitHub 上是 `main`。
+名字不同，所以**不能直接 `git push`**（会报错或推错分支），必须显式指定「把本地 HEAD 推到远程的 main」：
+
+```bash
+git push origin HEAD:main     # 正确
+git push blade  HEAD:main      # 正确
+```
+
+`HEAD` = 本地当前所在的提交；`:main` = 推到远程的 main 分支。
+
+> **想一劳永逸？** 把本地分支改名成和远程一致，以后就能直接 `git push origin`：
+> ```bash
+> git branch -m master main      # 本地 master 改名为 main
+> git push -u origin main        # 建立跟踪，之后 git push 即可
+> git push -u blade main
+> ```
+
+### 9.3 完整的日常推送流程（照抄）
+
+```bash
+git status                       # 1. 看改了什么
+git add -A                       # 2. 选中全部改动（或写具体文件名只推一部分）
+git commit -m "fix: 说明做了什么"  # 3. 存快照
+git push origin HEAD:main        # 4. 推研究组仓库
+git push blade  HEAD:main        # 5. 推个人仓库
+```
+
+### 9.4 推送后核实是否成功
+
+```bash
+git fetch --all
+git rev-parse --short HEAD
+git rev-parse --short origin/main
+git rev-parse --short blade/main
+```
+> 后三条 hash 都相同（比如都是 `cc6713e`）= 本地和两个远程完全同步，推送成功。
+> 如果 `rev-parse origin/main` 报 `Needed a single revision`，是还没 `git fetch --all`，先 fetch 再查。
+
+---
+
+## 10. 关于 SDK 库文件（为什么以前 clone 下来编译报错缺库）
+
+本项目依赖三套厂商 SDK 库，它们在工程目录内、CMake 编译时需要：
+- `CAM/lib/`（大恒相机 GxIAPICPPEx）
+- `DLP/cyusbserial/`（投影仪 Cypress USB-I2C 桥）
+- `CF_sensor/CFxxxx_Lib/lib/`（共聚焦传感器 SDK）
+
+**历史问题**：`.gitignore` 里的 `*.lib` / `*.dll` 一刀切忽略了所有库，导致这三套库从没被提交，
+每次 clone 下来都缺库、CMake 报 `LNK1104` 或 `SDK library not found`。
+
+**已修复**：`.gitignore` 加了白名单例外（`!CAM/lib/**` 等），这三套库现已纳入版本控制并推送。
+现在 clone 下来就自带库、能直接编译。
+
+> `build/` 下编译产生的库、以及 vcpkg 的外部库**不在此列**，仍照常忽略/不纳入——
+> 只有工程目录内、CMake 直接引用的这三套 SDK 库被特意保留。
+> 如果以后新增了别的必需库又被 `*.lib`/`*.dll` 忽略，照葫芦画瓢在 `.gitignore` 加一行 `!路径/**` 白名单即可。
 
 
