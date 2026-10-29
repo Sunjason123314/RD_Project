@@ -2020,68 +2020,23 @@ bool Point_Algorithm::separateBladeSurfaces(
         return Eigen::Vector2f(d.dot(u), d.dot(v));
     };
     auto to3D = [&](const Eigen::Vector2f& q){ return centroid + q.x() * u + q.y() * v; };
+    (void)to2D; (void)to3D;
 
-    // Kåsa 2D 圆拟合
-    auto fitCircle2D = [](const std::vector<Eigen::Vector2f>& pts,
-                          Eigen::Vector2f& c, float& r)->bool{
-        const int m = static_cast<int>(pts.size());
-        if(m < 3) return false;
-        Eigen::MatrixXf M(m, 3); Eigen::VectorXf b(m);
-        for(int i = 0; i < m; ++i)
-        { M(i,0)=2*pts[i].x(); M(i,1)=2*pts[i].y(); M(i,2)=1; b(i)=pts[i].squaredNorm(); }
-        Eigen::Vector3f s = M.colPivHouseholderQr().solve(b);
-        c = Eigen::Vector2f(s.x(), s.y());
-        const float r2 = s.z() + c.squaredNorm();
-        if(r2 <= 1e-9f) return false;
-        r = std::sqrt(r2); return true;
-    };
-
-    // 对一端边缘进行圆弧平滑：取两面靠该端的点拟合圆，用圆弧点替换
+    // 对一端边缘做汇聚：尖端 = 两面真实端点的中点。
+    // 纯插值、不做圆拟合/外推：中点必在两个真实数据点连线上，
+    // 数学上保证落在原始点云凸包内 → 绝不会向外鼓出。
+    // (边缘点本就稀疏，圆拟合不可靠，外推是之前"鼓包"的根因，已弃用)
     auto smoothEdge = [&](bool atLE){
-        const int kEdge = std::min(8, static_cast<int>(std::min(polyUp.size(), polyLo.size())) / 3);
-        if(kEdge < 3) return;
-
-        std::vector<Eigen::Vector2f> nb2d;
-        std::vector<int> idxUp, idxLo;  // 记录用了哪些索引
-        for(int i = 0; i < kEdge; ++i) {
-            const int idx = atLE ? i : (static_cast<int>(polyUp.size()) - 1 - i);
-            nb2d.push_back(to2D(polyUp[idx]));
-            idxUp.push_back(idx);
-        }
-        for(int i = 0; i < kEdge; ++i) {
-            const int idx = atLE ? i : (static_cast<int>(polyLo.size()) - 1 - i);
-            nb2d.push_back(to2D(polyLo[idx]));
-            idxLo.push_back(idx);
-        }
-
-        Eigen::Vector2f c; float r;
-        if(!fitCircle2D(nb2d, c, r) || r > sSpan * 0.5f) return;
-
-        // 找到拟合圆在弦向上的极值点作为共同尖端
-        const Eigen::Vector2f tip2d(atLE ? (c.x() - r) : (c.x() + r), c.y());
-        const Eigen::Vector3f tip3d = to3D(tip2d);
-
-        // 将两个面靠该端的点投影到拟合圆上，实现平滑
-        for(int i = 0; i < kEdge; ++i) {
-            const Eigen::Vector2f p = to2D(polyUp[idxUp[i]]);
-            const Eigen::Vector2f dir = (p - c).normalized();
-            const Eigen::Vector2f pOnCircle = c + dir * r;
-            polyUp[idxUp[i]] = to3D(pOnCircle);
-        }
-        for(int i = 0; i < kEdge; ++i) {
-            const Eigen::Vector2f p = to2D(polyLo[idxLo[i]]);
-            const Eigen::Vector2f dir = (p - c).normalized();
-            const Eigen::Vector2f pOnCircle = c + dir * r;
-            polyLo[idxLo[i]] = to3D(pOnCircle);
-        }
-
-        // 端点强制汇聚到共同尖端
-        polyUp[atLE ? 0 : polyUp.size()-1] = tip3d;
-        polyLo[atLE ? 0 : polyLo.size()-1] = tip3d;
+        if(polyUp.size() < 2 || polyLo.size() < 2) return;
+        const Eigen::Vector3f eUp = atLE ? polyUp.front() : polyUp.back();
+        const Eigen::Vector3f eLo = atLE ? polyLo.front() : polyLo.back();
+        const Eigen::Vector3f tip = 0.5f * (eUp + eLo);
+        polyUp[atLE ? 0 : polyUp.size()-1] = tip;
+        polyLo[atLE ? 0 : polyLo.size()-1] = tip;
     };
 
-    smoothEdge(true);   // 前缘 LE 平滑
-    smoothEdge(false);  // 后缘 TE 平滑
+    smoothEdge(true);   // 前缘 LE 汇聚
+    smoothEdge(false);  // 后缘 TE 汇聚
 
     // --- 6. 每个面沿弧长等间隔重采样成开放曲线 ---
     auto resampleOut = [&](const std::vector<Eigen::Vector3f>& poly, PCLCloud::Ptr& out){

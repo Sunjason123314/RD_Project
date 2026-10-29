@@ -15,7 +15,7 @@ if(USECUDA)
     # 如果更换显卡，可根据实际 GPU 架构修改该数值
     set(CMAKE_CUDA_ARCHITECTURES 75)
 
-    project(auto_measurement_cmake VERSION 0.1 LANGUAGES C CXX CUDA)
+    project(auto_measurement_cmake VERSION 3.3.7 LANGUAGES C CXX CUDA)
 
     # 查找并配置 CUDA
     find_package(CUDA REQUIRED)
@@ -25,7 +25,7 @@ if(USECUDA)
 
     message(STATUS "cuda version: " ${CUDA_VERSION_STRING})
 else()
-    project(auto_measurement_cmake VERSION 0.1 LANGUAGES C CXX CUDA)
+    project(auto_measurement_cmake VERSION 3.3.7 LANGUAGES C CXX CUDA)
 endif()
 
 
@@ -224,19 +224,6 @@ add_executable(auto_measurement_cmake
 
 )
 
-# 解决主工程 Calibration 与 SL_QT Calibration 的同名冲突：
-# 仅对 SL_QT 核心源和集成入口做编译期类名重写（Calibration -> SLCalibration）。
-set_source_files_properties(
-    SL_QT/sl_integration_runner.cpp
-    SL_QT/src/class/calibration.cpp
-    SL_QT/src/class/calibration.cu
-    SL_QT/src/class/matcher.cpp
-    SL_QT/src/class/matcher.cu
-    SL_QT/src/class/patterncoder.cpp
-    SL_QT/src/class/patterncoder.cu
-    PROPERTIES COMPILE_DEFINITIONS "Calibration=SLCalibration;SL_ENABLE_MATLAB"
-)
-
 # Point_Algorithm.cpp 包含大量模板和内联函数，需要 /bigobj 选项
 if(MSVC)
     set_source_files_properties(
@@ -272,7 +259,10 @@ include_directories(
 # ===========
 
 # 引入 vcpkg 构建系统
-set(MY_COMPUTER_TYPE "DESKTOP")
+# 可在 Qt Creator/CMake Tools 中设置 -DMY_COMPUTER_TYPE=LAPTOP 或 DESKTOP，
+# 不再需要为了切换机器而编辑本文件。
+set(MY_COMPUTER_TYPE "LAPTOP" CACHE STRING "Build-machine profile: LAPTOP or DESKTOP")
+set_property(CACHE MY_COMPUTER_TYPE PROPERTY STRINGS LAPTOP DESKTOP)
 
 # 根据变量判断机器类型并设置路径
 if(MY_COMPUTER_TYPE STREQUAL "LAPTOP")
@@ -316,15 +306,68 @@ find_package(jsoncpp CONFIG REQUIRED)
 find_package(OpenCASCADE CONFIG REQUIRED)
 
 # MATLAB 库配置
+# MATLAB_ROOT 是可覆盖的缓存变量。例如：
+#   cmake -DMATLAB_ROOT=D:/applications/MatLab ...
+# LAPTOP 的默认值必须是当前笔记本实际安装位置，而不是旧电脑上的路径。
 if(MY_COMPUTER_TYPE STREQUAL "LAPTOP")
-    set(MATLABLIBS_PATH E:/software/matlab2022a/extern/lib/win64/microsoft)
-    set(MATLAB_INCLUDE_DIR E:/software/matlab2022a/extern/include)
+    set(MATLAB_DEFAULT_ROOT "D:/applications/MatLab")
 elseif(MY_COMPUTER_TYPE STREQUAL "DESKTOP")
-    set(MATLABLIBS_PATH D:/application/matlab2022a/extern/lib/win64/microsoft)
-    set(MATLAB_INCLUDE_DIR D:/application/matlab2022a/extern/include)
+    set(MATLAB_DEFAULT_ROOT "D:/application/matlab2022a")
 endif()
-file(GLOB MATLAB_LIBS "${MATLABLIBS_PATH}/*.lib")
-include_directories(${MATLAB_INCLUDE_DIR})
+set(MATLAB_ROOT "${MATLAB_DEFAULT_ROOT}" CACHE PATH "MATLAB installation root")
+set(MATLABLIBS_PATH "${MATLAB_ROOT}/extern/lib/win64/microsoft")
+set(MATLAB_INCLUDE_DIR "${MATLAB_ROOT}/extern/include")
+
+# MATLAB 是结构光模块读取 .mat 标定文件的可选依赖。
+# 未安装 MATLAB 时仍可通过标定图片重新标定，因此不要让缺失的 SDK
+# 阻断整个 Qt 程序的构建。
+option(REQUIRE_MATLAB "Fail CMake configuration when MATLAB .mat support is unavailable" OFF)
+set(MATLAB_AVAILABLE OFF)
+set(MATLAB_LIBS)
+set(MATLAB_MAT_LIB "${MATLABLIBS_PATH}/libmat.lib")
+set(MATLAB_MX_LIB "${MATLABLIBS_PATH}/libmx.lib")
+if(EXISTS "${MATLAB_INCLUDE_DIR}/mat.h" AND
+   EXISTS "${MATLAB_MAT_LIB}" AND
+   EXISTS "${MATLAB_MX_LIB}")
+    set(MATLAB_AVAILABLE ON)
+    set(MATLAB_LIBS "${MATLAB_MAT_LIB}" "${MATLAB_MX_LIB}")
+    include_directories("${MATLAB_INCLUDE_DIR}")
+    message(STATUS "MATLAB .mat support: ENABLED")
+    message(STATUS "  MATLAB root: ${MATLAB_ROOT}")
+    message(STATUS "  MATLAB libraries: ${MATLAB_MAT_LIB};${MATLAB_MX_LIB}")
+else()
+    set(MATLAB_MISSING_MESSAGE
+        "MATLAB .mat support is DISABLED. Expected mat.h, libmat.lib and libmx.lib under: ${MATLAB_ROOT}\n"
+        "  header: ${MATLAB_INCLUDE_DIR}/mat.h\n"
+        "  libraries: ${MATLABLIBS_PATH}\n"
+        "Set -DMATLAB_ROOT=<your MATLAB root> if this machine uses another location.")
+    if(REQUIRE_MATLAB)
+        message(FATAL_ERROR "${MATLAB_MISSING_MESSAGE}")
+    else()
+        message(WARNING "${MATLAB_MISSING_MESSAGE}")
+    endif()
+endif()
+
+# 将最终状态写入 CMake Cache，Qt Creator/CMake Tools 的 Configure 页面可直接查看。
+set(MATLAB_AVAILABLE "${MATLAB_AVAILABLE}" CACHE BOOL "Whether MATLAB .mat support is enabled" FORCE)
+
+# 解决主工程 Calibration 与 SL_QT Calibration 的同名冲突：
+# 仅对 SL_QT 核心源和集成入口做编译期类名重写（Calibration -> SLCalibration）。
+# 只有在 MATLAB SDK 完整可用时才启用 .mat 读取代码。
+set(SL_QT_COMPILE_DEFINITIONS "Calibration=SLCalibration")
+if(MATLAB_AVAILABLE)
+    list(APPEND SL_QT_COMPILE_DEFINITIONS "SL_ENABLE_MATLAB")
+endif()
+set_source_files_properties(
+    SL_QT/sl_integration_runner.cpp
+    SL_QT/src/class/calibration.cpp
+    SL_QT/src/class/calibration.cu
+    SL_QT/src/class/matcher.cpp
+    SL_QT/src/class/matcher.cu
+    SL_QT/src/class/patterncoder.cpp
+    SL_QT/src/class/patterncoder.cu
+    PROPERTIES COMPILE_DEFINITIONS "${SL_QT_COMPILE_DEFINITIONS}"
+)
 
 # CAM 相机 SDK
 file(GLOB CAMERA_LIB "${CMAKE_CURRENT_SOURCE_DIR}/CAM/lib/x64/*.lib")

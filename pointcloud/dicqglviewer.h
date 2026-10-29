@@ -108,6 +108,7 @@ public:
     void add_axes(const Eigen::Matrix4f &transform);//添加坐标轴
     void add_plane(const pcl::PointCloud<pcl::PointXYZ>::Ptr &plane);//添加平面
     void setMultiCornerSelectionEnabled(bool enabled);//启用/禁用多边形多点选择模式
+    void setMeshWireframeEnabled(bool enabled) { mesh_wireframe_enabled = enabled; update(); }//是否叠加网格线框
     //点云导入
     PCLCloud::Ptr source_cloud;//源点云(点云1)
     PCLCloud::Ptr target_cloud;//目标点云(点云2)
@@ -164,6 +165,7 @@ private:
     vector<PCLCloud> mesh_cloud;
     vector<bool> mesh_visibility;
     vector<QString> mesh_display_tags;
+    bool mesh_wireframe_enabled = false;  // 是否叠加三角网格线框(默认关，避免展向环边显成"一横一横")
     void draw_mesh();
     /*******************线段绘制*****************/
     vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> line_plot;

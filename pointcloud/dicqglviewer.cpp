@@ -1272,7 +1272,9 @@ void DICQGLViewer::draw_mesh()
 
     glDisable(GL_POLYGON_OFFSET_FILL);
 
-    for (int j = 0; j < mesh_plot.size(); ++j)
+    // 三角网格线框叠加：默认关闭。展向截面少时，横向环边会显成明显的"一横一横"，
+    // 且 flat 着色已足够表达面片，故除非显式开启否则不画线框。
+    for (int j = 0; mesh_wireframe_enabled && j < mesh_plot.size(); ++j)
     {
         if (j < static_cast<int>(mesh_visibility.size()) && !mesh_visibility[j])
             continue;
