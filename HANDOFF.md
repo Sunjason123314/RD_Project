@@ -1,4 +1,4 @@
-# 交接文档 — 点云列表分组功能 & ICP 多片
+﻿# 交接文档 — 点云列表分组功能 & ICP 多片
 
 写给完全没有上下文的新会话。项目是一个 Qt5 (5.15.2 / MSVC2019 x64) + CUDA + PCL 的叶片测量桌面程序，
 主工程 CMake 目标名 `auto_measurement_cmake`。**用户自己在 Qt Creator 里 build，不要在命令行尝试
