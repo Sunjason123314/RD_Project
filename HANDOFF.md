@@ -9,6 +9,41 @@ build**（命令行缺少 MSVC 开发环境变量，会报 `type_traits`/`memory
 - 本地 `data/` 是采集图片、点云、标定和中间输出数据（当前约 64.77 GB），**不提交、不推送**；已由 `.gitignore` 忽略。
 - 如需共享测试数据，请使用项目约定的独立数据存储，不要将其加入 Git 提交。
 
+### 分支与双机协作（2026-11-01 起）
+
+- `main` 是已在笔记本完成实机验证的稳定主程序；只接收已验证的合并。两台电脑均以它为稳定基线。
+- `beta` 是集成与测试分支；新功能在笔记本完成实机验证前，先合入这里。
+- `feature/<功能名>` 用于较独立或较大的功能开发。例如 `feature/blade-reconstruction`、`feature/jog-control`。
+  **分支按代码成熟度划分，不按台式机或笔记本划分。**
+- `origin`（HIT-Visual-Measurement-Research-Group/Auto-Measurement）是唯一主仓库；`blade`
+  （Sunjason123314/blade_measurement）仅作为镜像备份。日常拉取和协作一律使用 `origin`。
+
+推荐流程：台式机从 `beta` 创建 `feature/<功能名>` 开发并推送；笔记本检出同一功能分支进行设备实测；
+通过后合入 `beta`；`beta` 整体验证稳定后再合入 `main`，并创建版本标签（如 `v3.3.8`）。不要直接在 `main` 上开发。
+
+台式机开发新功能：
+
+```powershell
+git switch beta
+git pull --ff-only origin beta
+git switch -c feature/<功能名>
+```
+
+笔记本测试已推送的功能：
+
+```powershell
+git fetch origin
+git switch feature/<功能名>
+git pull --ff-only origin feature/<功能名>
+```
+
+更新稳定主程序：
+
+```powershell
+git switch main
+git pull --ff-only origin main
+```
+
 ---
 
 ## 一、任务总览
