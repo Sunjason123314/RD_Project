@@ -612,6 +612,64 @@ Point_Algorithm::RotationAxisFitResult Point_Algorithm::fitRotationAxisFromCente
     return result;
 }
 
+// 多条与回转轴近似平行的圆柱轴线联合拟合（虚拟圆柱）。
+// 每条线 L_i = p_i + t*d_i 中 p_i 可沿 d_i 任意平移。把 p_i 投影到
+// 垂直共同方向的平面后，这种任意平移会被消除，投影点正好构成圆轨迹。
+Point_Algorithm::RotationAxisFitResult Point_Algorithm::fitRotationAxisFromLines(
+    const std::vector<Eigen::Vector3f>& linePoints,
+    const std::vector<Eigen::Vector3f>& lineDirections)
+{
+    RotationAxisFitResult result;
+    const int count = static_cast<int>(linePoints.size());
+    if(count < 3 || lineDirections.size() != linePoints.size())
+        return result;
+
+    std::vector<Eigen::Vector3f> directions;
+    directions.reserve(static_cast<std::size_t>(count));
+    Eigen::Vector3f reference;
+    for(int i = 0; i < count; ++i)
+    {
+        Eigen::Vector3f direction = lineDirections[static_cast<std::size_t>(i)];
+        if(direction.norm() < 1e-6f)
+            return result;
+        direction.normalize();
+        if(directions.empty())
+            reference = direction;
+        // 圆柱轴线没有正反方向；统一朝向以消除拟合器的随机翻转。
+        if(direction.dot(reference) < 0.0f)
+            direction = -direction;
+        directions.push_back(direction);
+    }
+
+    Eigen::Vector3f commonDirection = Eigen::Vector3f::Zero();
+    for(const Eigen::Vector3f& direction : directions)
+        commonDirection += direction;
+    if(commonDirection.norm() < 1e-6f)
+        return result;
+
+    commonDirection.normalize();
+    std::vector<Eigen::Vector3f> projectedLinePoints;
+    projectedLinePoints.reserve(static_cast<std::size_t>(count));
+    float directionSquareError = 0.0f;
+    for(int i = 0; i < count; ++i)
+    {
+        const Eigen::Vector3f& point = linePoints[static_cast<std::size_t>(i)];
+        const Eigen::Vector3f& direction = directions[static_cast<std::size_t>(i)];
+        projectedLinePoints.push_back(point - commonDirection * commonDirection.dot(point));
+        const float parallelResidual = commonDirection.cross(direction).norm();
+        directionSquareError += parallelResidual * parallelResidual;
+    }
+
+    result = fitRotationAxisFromCenters(projectedLinePoints);
+    if(!result.success)
+        return result;
+
+    // 锁定为各圆柱轴线的平均方向，避免圆轨迹平面的微小数值扰动改变方向。
+    result.axisDirection = commonDirection;
+    result.planeRMSE = std::sqrt(directionSquareError / static_cast<float>(count));
+    return result;
+}
+
 // 平面采样：根据参考点云范围，在拟合平面上生成规则网格点。
 PCLCloud::Ptr Point_Algorithm::samplePlanePatch(const Eigen::Vector4f& plane,
                                                  const PCLCloud::Ptr& reference,

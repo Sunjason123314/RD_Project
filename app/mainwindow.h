@@ -343,6 +343,8 @@ private slots:
     void deletePointCloudGroupKeepItems(int headerRow);
     // 把当前选中的数据项归入指定分组（拖入分组时调用）
     void assignSelectedItemsToGroup(const QString& groupName);
+    // 按唯一编号把指定数据项归入分组（自动生成拟合结果时调用）。
+    void assignPointCloudItemToGroup(quint64 itemId, const QString& groupName);
     // 把当前选中的数据项移出分组（拖到无分组区域时调用）
     void removeSelectedItemsFromGroup();
     void on_comboBox_colorselect_currentIndexChanged(int index);
@@ -355,6 +357,7 @@ private slots:
     void on_PCA_Method_clicked();
     void on_Centroid_Method_clicked();
     void on_recon_ball_clicked();
+    void on_recon_cylinder_clicked();
     void on_Fit_clicked();
     void on_coarseregistration_clicked(); // coarse registration
     void on_RT_Matrix_clicked();          // apply stored RT matrix to selected data
@@ -557,6 +560,17 @@ private:
         float radius = 0.0f;
     };
     QHash<int, SphereFitData> sphereFitResults; // key = meshIndex
+
+    // 圆柱拟合的参数与其可视化轴线。当前仅在运行期保存，工程持久化将在下一步实现。
+    struct CylinderFitData {
+        Eigen::Vector3f axisPoint = Eigen::Vector3f::Zero();
+        Eigen::Vector3f axisDirection = Eigen::Vector3f::UnitZ();
+        float radius = 0.0f;
+        float minAxisT = 0.0f;
+        float maxAxisT = 0.0f;
+        int axisLineIndex = -1;
+    };
+    QHash<int, CylinderFitData> cylinderFitResults; // key = meshIndex
     Eigen::Matrix4f m_coarseRegTransform = Eigen::Matrix4f::Identity();
     bool m_hasCoarseRegResult = false;
 
@@ -631,6 +645,9 @@ private:
     QTimer* confTimer = nullptr;
     QTimer* StatusBarTimer = nullptr;
     JogPanel *jogPanel = nullptr;
+    double m_rotateVelocity = 5.5;
+    double m_positionVelocity = 15.0;
+    double m_jogVelocity = 3.0;
 
     // ==================== 点云重建与窗口连接 ====================
     bool isArmInPosition();

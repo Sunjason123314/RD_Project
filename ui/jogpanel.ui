@@ -2,88 +2,38 @@
 <ui version="4.0">
  <class>JogPanel</class>
  <widget class="QWidget" name="JogPanel">
-  <property name="geometry">
-   <rect>
-    <x>0</x>
-    <y>0</y>
-    <width>400</width>
-    <height>300</height>
-   </rect>
-  </property>
-  <property name="windowTitle">
-   <string>Form</string>
-  </property>
-  <layout class="QGridLayout" name="gridLayout">
-   <item row="1" column="0">
-    <widget class="QPushButton" name="btnYPositive">
-     <property name="text">
-      <string>Y+</string>
-     </property>
-    </widget>
-   </item>
-   <item row="3" column="1">
-    <widget class="QPushButton" name="btnAdjustANegative">
-     <property name="text">
-      <string>调心X-</string>
-     </property>
-    </widget>
-   </item>
-   <item row="2" column="1">
-    <widget class="QPushButton" name="btnZNegative">
-     <property name="text">
-      <string>Z-</string>
-     </property>
-    </widget>
-   </item>
-   <item row="1" column="1">
-    <widget class="QPushButton" name="btnYNegative">
-     <property name="text">
-      <string>Y-</string>
-     </property>
-    </widget>
-   </item>
-   <item row="2" column="0">
-    <widget class="QPushButton" name="btnZPositive">
-     <property name="text">
-      <string>Z+</string>
-     </property>
-    </widget>
-   </item>
-   <item row="0" column="1">
-    <widget class="QPushButton" name="btnXNegative">
-     <property name="text">
-      <string>X-</string>
-     </property>
-    </widget>
-   </item>
-   <item row="3" column="0">
-    <widget class="QPushButton" name="btnAdjustAPositive">
-     <property name="text">
-      <string>调心X+</string>
-     </property>
-    </widget>
-   </item>
-   <item row="0" column="0">
-    <widget class="QPushButton" name="btnXPositive">
-     <property name="text">
-      <string>X+</string>
-     </property>
-    </widget>
-   </item>
-   <item row="4" column="0">
-    <widget class="QPushButton" name="btnAdjustBPositive">
-     <property name="text">
-      <string>调心Y+</string>
-     </property>
-    </widget>
-   </item>
-   <item row="4" column="1">
-    <widget class="QPushButton" name="btnAdjustBNegative">
-     <property name="text">
-      <string>调心Y-</string>
-     </property>
-    </widget>
-   </item>
+  <property name="geometry"><rect><x>0</x><y>0</y><width>500</width><height>160</height></rect></property>
+  <property name="windowTitle"><string>轴控制面板</string></property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item><widget class="QFrame" name="titleBar"><layout class="QHBoxLayout" name="titleBarLayout"><item><widget class="QLabel" name="titleLabel"><property name="text"><string>轴控制面板</string></property></widget></item><item><spacer name="titleSpacer"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item><item><widget class="QToolButton" name="btnClosePanel"><property name="text"><string>×</string></property><property name="toolTip"><string>关闭轴控制面板</string></property></widget></item></layout></widget></item>
+   <item><widget class="QToolButton" name="btnToggleAbsolute"><property name="text"><string>▶  绝对位置运行</string></property><property name="checkable"><bool>true</bool></property><property name="checked"><bool>false</bool></property><property name="toolButtonStyle"><enum>Qt::ToolButtonTextOnly</enum></property></widget></item>
+   <item><widget class="QWidget" name="absoluteContent"><layout class="QGridLayout" name="absoluteLayout">
+    <item row="0" column="0"><widget class="QLabel" name="labelTargetX"><property name="text"><string>X:</string></property></widget></item><item row="0" column="1"><widget class="QLineEdit" name="editTargetX"/></item><item row="0" column="2"><widget class="QLabel" name="labelTargetXUnit"><property name="text"><string>mm</string></property></widget></item><item row="0" column="3"><widget class="QPushButton" name="btnMoveX"><property name="text"><string>运行</string></property></widget></item>
+    <item row="1" column="0"><widget class="QLabel" name="labelTargetY1"><property name="text"><string>Y1:</string></property></widget></item><item row="1" column="1"><widget class="QLineEdit" name="editTargetY1"/></item><item row="1" column="2"><widget class="QLabel" name="labelTargetY1Unit"><property name="text"><string>mm</string></property></widget></item><item row="1" column="3"><widget class="QPushButton" name="btnMoveY1"><property name="text"><string>运行</string></property></widget></item>
+    <item row="2" column="0"><widget class="QLabel" name="labelTargetY2"><property name="text"><string>Y2:</string></property></widget></item><item row="2" column="1"><widget class="QLineEdit" name="editTargetY2"/></item><item row="2" column="2"><widget class="QLabel" name="labelTargetY2Unit"><property name="text"><string>mm</string></property></widget></item><item row="2" column="3"><widget class="QPushButton" name="btnMoveY2"><property name="text"><string>运行</string></property></widget></item>
+    <item row="3" column="0"><widget class="QLabel" name="labelTargetZ1"><property name="text"><string>Z1:</string></property></widget></item><item row="3" column="1"><widget class="QLineEdit" name="editTargetZ1"/></item><item row="3" column="2"><widget class="QLabel" name="labelTargetZ1Unit"><property name="text"><string>mm</string></property></widget></item><item row="3" column="3"><widget class="QPushButton" name="btnMoveZ1"><property name="text"><string>运行</string></property></widget></item>
+    <item row="4" column="0"><widget class="QLabel" name="labelTargetZ2"><property name="text"><string>Z2:</string></property></widget></item><item row="4" column="1"><widget class="QLineEdit" name="editTargetZ2"/></item><item row="4" column="2"><widget class="QLabel" name="labelTargetZ2Unit"><property name="text"><string>mm</string></property></widget></item><item row="4" column="3"><widget class="QPushButton" name="btnMoveZ2"><property name="text"><string>运行</string></property></widget></item>
+    <item row="5" column="0"><widget class="QLabel" name="labelTargetLargeRotate"><property name="text"><string>大转台:</string></property></widget></item><item row="5" column="1"><widget class="QLineEdit" name="editTargetLargeRotate"><property name="text"><string>330</string></property></widget></item><item row="5" column="2"><widget class="QLabel" name="labelTargetLargeRotateUnit"><property name="text"><string>°</string></property></widget></item><item row="5" column="3"><widget class="QPushButton" name="btnMoveLargeRotate"><property name="text"><string>运行</string></property></widget></item>
+    <item row="6" column="0"><widget class="QLabel" name="labelTargetSmallRotate"><property name="text"><string>小转台:</string></property></widget></item><item row="6" column="1"><widget class="QLineEdit" name="editTargetSmallRotate"/></item><item row="6" column="2"><widget class="QLabel" name="labelTargetSmallRotateUnit"><property name="text"><string>°</string></property></widget></item><item row="6" column="3"><widget class="QPushButton" name="btnMoveSmallRotate"><property name="text"><string>运行</string></property></widget></item>
+   </layout></widget></item>
+   <item><widget class="QToolButton" name="btnToggleStep"><property name="text"><string>▶  相对步进</string></property><property name="checkable"><bool>true</bool></property><property name="checked"><bool>false</bool></property><property name="toolButtonStyle"><enum>Qt::ToolButtonTextOnly</enum></property></widget></item>
+   <item><widget class="QWidget" name="stepContent"><layout class="QGridLayout" name="stepLayout">
+    <item row="0" column="0"><widget class="QLabel" name="labelStepX"><property name="text"><string>X1:</string></property></widget></item><item row="0" column="1"><widget class="QLineEdit" name="editStepX"><property name="placeholderText"><string>相对步进值</string></property></widget></item><item row="0" column="2"><widget class="QLabel" name="labelStepXUnit"><property name="text"><string>mm</string></property></widget></item><item row="0" column="3"><widget class="QPushButton" name="btnStepX"><property name="text"><string>步进</string></property></widget></item>
+    <item row="1" column="0"><widget class="QLabel" name="labelStepY1"><property name="text"><string>Y1:</string></property></widget></item><item row="1" column="1"><widget class="QLineEdit" name="editStepY1"><property name="placeholderText"><string>相对步进值</string></property></widget></item><item row="1" column="2"><widget class="QLabel" name="labelStepY1Unit"><property name="text"><string>mm</string></property></widget></item><item row="1" column="3"><widget class="QPushButton" name="btnStepY1"><property name="text"><string>步进</string></property></widget></item>
+    <item row="2" column="0"><widget class="QLabel" name="labelStepZ1"><property name="text"><string>Z1:</string></property></widget></item><item row="2" column="1"><widget class="QLineEdit" name="editStepZ1"><property name="placeholderText"><string>相对步进值</string></property></widget></item><item row="2" column="2"><widget class="QLabel" name="labelStepZ1Unit"><property name="text"><string>mm</string></property></widget></item><item row="2" column="3"><widget class="QPushButton" name="btnStepZ1"><property name="text"><string>步进</string></property></widget></item>
+    <item row="3" column="0"><widget class="QLabel" name="labelStepY2"><property name="text"><string>Y2:</string></property></widget></item><item row="3" column="1"><widget class="QLineEdit" name="editStepY2"><property name="placeholderText"><string>相对步进值</string></property></widget></item><item row="3" column="2"><widget class="QLabel" name="labelStepY2Unit"><property name="text"><string>mm</string></property></widget></item><item row="3" column="3"><widget class="QPushButton" name="btnStepY2"><property name="text"><string>步进</string></property></widget></item>
+    <item row="4" column="0"><widget class="QLabel" name="labelStepZ2"><property name="text"><string>Z2:</string></property></widget></item><item row="4" column="1"><widget class="QLineEdit" name="editStepZ2"><property name="placeholderText"><string>相对步进值</string></property></widget></item><item row="4" column="2"><widget class="QLabel" name="labelStepZ2Unit"><property name="text"><string>mm</string></property></widget></item><item row="4" column="3"><widget class="QPushButton" name="btnStepZ2"><property name="text"><string>步进</string></property></widget></item>
+    <item row="5" column="0"><widget class="QLabel" name="labelStepLargeRotate"><property name="text"><string>大转台:</string></property></widget></item><item row="5" column="1"><widget class="QLineEdit" name="editStepLargeRotate"><property name="placeholderText"><string>-180 至 180</string></property></widget></item><item row="5" column="2"><widget class="QLabel" name="labelStepLargeRotateUnit"><property name="text"><string>°</string></property></widget></item><item row="5" column="3"><widget class="QPushButton" name="btnStepLargeRotate"><property name="text"><string>步进</string></property></widget></item>
+    <item row="6" column="0"><widget class="QLabel" name="labelStepSmallRotate"><property name="text"><string>小转台:</string></property></widget></item><item row="6" column="1"><widget class="QLineEdit" name="editStepSmallRotate"><property name="placeholderText"><string>-180 至 180</string></property></widget></item><item row="6" column="2"><widget class="QLabel" name="labelStepSmallRotateUnit"><property name="text"><string>°</string></property></widget></item><item row="6" column="3"><widget class="QPushButton" name="btnStepSmallRotate"><property name="text"><string>步进</string></property></widget></item>
+   </layout></widget></item>
+   <item><widget class="QToolButton" name="btnToggleJog"><property name="text"><string>▶  点动控制</string></property><property name="checkable"><bool>true</bool></property><property name="checked"><bool>false</bool></property><property name="toolButtonStyle"><enum>Qt::ToolButtonTextOnly</enum></property></widget></item>
+   <item><widget class="QWidget" name="jogContent"><layout class="QGridLayout" name="jogLayout">
+    <item row="0" column="0"><widget class="QPushButton" name="btnXPositive"><property name="text"><string>X+</string></property></widget></item><item row="0" column="1"><widget class="QPushButton" name="btnXNegative"><property name="text"><string>X-</string></property></widget></item>
+    <item row="1" column="0"><widget class="QPushButton" name="btnYPositive"><property name="text"><string>Y+</string></property></widget></item><item row="1" column="1"><widget class="QPushButton" name="btnYNegative"><property name="text"><string>Y-</string></property></widget></item>
+    <item row="2" column="0"><widget class="QPushButton" name="btnZPositive"><property name="text"><string>Z+</string></property></widget></item><item row="2" column="1"><widget class="QPushButton" name="btnZNegative"><property name="text"><string>Z-</string></property></widget></item>
+    <item row="3" column="0"><widget class="QPushButton" name="btnAdjustAPositive"><property name="text"><string>调心X+</string></property></widget></item><item row="3" column="1"><widget class="QPushButton" name="btnAdjustANegative"><property name="text"><string>调心X-</string></property></widget></item>
+    <item row="4" column="0"><widget class="QPushButton" name="btnAdjustBPositive"><property name="text"><string>调心Y+</string></property></widget></item><item row="4" column="1"><widget class="QPushButton" name="btnAdjustBNegative"><property name="text"><string>调心Y-</string></property></widget></item>
+   </layout></widget></item>
   </layout>
  </widget>
  <resources/>

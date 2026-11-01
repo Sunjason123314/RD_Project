@@ -61,6 +61,23 @@ signals:
     void adjustBNegativePressed();
     void adjustBNegativeReleased();
 
+    // 悬浮面板中的实体绝对位置控件。
+    void moveXRequested(double target);
+    void moveY1Requested(double target);
+    void moveY2Requested(double target);
+    void moveZ1Requested(double target);
+    void moveZ2Requested(double target);
+    void moveLargeRotateRequested(double target);
+    void moveSmallRotateRequested(double target);
+
+    void stepXRequested(double step);
+    void stepY1Requested(double step);
+    void stepZ1Requested(double step);
+    void stepY2Requested(double step);
+    void stepZ2Requested(double step);
+    void stepLargeRotateRequested(double step);
+    void stepSmallRotateRequested(double step);
+
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;

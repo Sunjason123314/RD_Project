@@ -62,9 +62,13 @@
 #include <QItemSelection>
 #include <QAbstractItemView>
 #include <QListView>
+#include <QListWidget>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QColor>
 #include <QHash>
+#include <QSet>
 #include <QVariant>
 #include <QFileDialog>
 #include <QFile>
@@ -152,6 +156,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 绑定信号槽
     intial_window_connect();
+    // 三维框选菜单“Save selected points to list”的信号连接。
+    Connect_executeStep();
 
     initPlcRuntimeConnection();
     initChartContainer();
@@ -1343,6 +1349,71 @@ void MainWindow::assignSelectedItemsToGroup(const QString& groupName)
                                            " (" + QString::number(memberIds.count()) + tr(" item(s)") + ")");
 }
 
+void MainWindow::assignPointCloudItemToGroup(quint64 itemId, const QString& groupName)
+{
+    if(!pointCloudListModel || itemId == 0 || groupName.isEmpty())
+        return;
+
+    int sourceRow = -1;
+    int headerRow = -1;
+    for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
+    {
+        QStandardItem* item = pointCloudListModel->item(row);
+        if(!item)
+            continue;
+
+        if(item->data(RoleUniqueId).toULongLong() == itemId)
+            sourceRow = row;
+        if(item->data(RoleEntryType).toInt() == static_cast<int>(PointCloudEntryType::Group) &&
+           item->data(RoleGroupName).toString() == groupName)
+        {
+            headerRow = row;
+        }
+    }
+    if(sourceRow < 0)
+        return;
+
+    // 首次自动拟合时创建分组标题；之后只复用已有标题。
+    if(headerRow < 0)
+    {
+        auto* groupItem = new QStandardItem;
+        groupItem->setData(static_cast<int>(PointCloudEntryType::Group), RoleEntryType);
+        groupItem->setData(groupName, RoleGroupName);
+        groupItem->setData(false, RoleGroupCollapsed);
+        groupItem->setData(static_cast<qulonglong>(nextListItemId++), RoleUniqueId);
+        groupItem->setEditable(false);
+        groupItem->setFlags((groupItem->flags() | Qt::ItemIsEnabled)
+                            & ~Qt::ItemIsSelectable
+                            & ~Qt::ItemIsDragEnabled
+                            & ~Qt::ItemIsDropEnabled);
+        groupItem->setBackground(QColor(226, 232, 240));
+        groupItem->setForeground(QColor(30, 41, 59));
+        QFont font = groupItem->font();
+        font.setBold(true);
+        groupItem->setFont(font);
+        pointCloudListModel->appendRow(groupItem);
+    }
+
+    // takeRow 后重新定位标题，避免行号变化导致插入位置错误。
+    QList<QStandardItem*> rowItems = pointCloudListModel->takeRow(sourceRow);
+    if(rowItems.isEmpty())
+        return;
+    rowItems.first()->setData(groupName, RoleGroupName);
+
+    headerRow = -1;
+    for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
+    {
+        QStandardItem* item = pointCloudListModel->item(row);
+        if(item && item->data(RoleEntryType).toInt() == static_cast<int>(PointCloudEntryType::Group) &&
+           item->data(RoleGroupName).toString() == groupName)
+        {
+            headerRow = row;
+            break;
+        }
+    }
+    pointCloudListModel->insertRow(headerRow >= 0 ? headerRow + 1 : pointCloudListModel->rowCount(), rowItems);
+}
+
 void MainWindow::removeSelectedItemsFromGroup()
 {
     if(!pointCloudListModel || !ui || !ui->listWidgetPointCloudFiles)
@@ -1403,6 +1474,14 @@ void MainWindow::relinkFittedGeometryMeshIndicesAfterRemoval(int removedMeshInde
     if(!pointCloudListModel)
         return;
 
+    // 圆柱网格被删除时，同时删除其附属的可视化轴线。
+    if(cylinderFitResults.contains(removedMeshIndex))
+    {
+        const int axisLineIndex = cylinderFitResults.value(removedMeshIndex).axisLineIndex;
+        if(axisLineIndex >= 0 && ui && ui->DicGLWidget && ui->DicGLWidget->removeLine(axisLineIndex))
+            relinkLineIndicesAfterRemoval(axisLineIndex);
+    }
+
     for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
     {
         QStandardItem* item = pointCloudListModel->item(row);
@@ -1431,6 +1510,17 @@ void MainWindow::relinkFittedGeometryMeshIndicesAfterRemoval(int removedMeshInde
             shifted.insert(it.key(), it.value());
     }
     sphereFitResults = shifted;
+
+    cylinderFitResults.remove(removedMeshIndex);
+    QHash<int, CylinderFitData> shiftedCylinders;
+    for(auto it = cylinderFitResults.begin(); it != cylinderFitResults.end(); ++it)
+    {
+        if(it.key() > removedMeshIndex)
+            shiftedCylinders.insert(it.key() - 1, it.value());
+        else
+            shiftedCylinders.insert(it.key(), it.value());
+    }
+    cylinderFitResults = shiftedCylinders;
 }
 
 void MainWindow::relinkPointCloudIndicesAfterRemoval(int removedPointCloudIndex)
@@ -1477,6 +1567,15 @@ void MainWindow::relinkLineIndicesAfterRemoval(int removedLineIndex)
             item->setData(lineIndex - 1, RoleLineIndex);
         else if(lineIndex == removedLineIndex)
             item->setData(-1, RoleLineIndex);
+    }
+
+    // 同步圆柱拟合结果中记录的轴线索引。
+    for(auto it = cylinderFitResults.begin(); it != cylinderFitResults.end(); ++it)
+    {
+        if(it->axisLineIndex > removedLineIndex)
+            --it->axisLineIndex;
+        else if(it->axisLineIndex == removedLineIndex)
+            it->axisLineIndex = -1;
     }
 }
 
@@ -2722,6 +2821,7 @@ QPushButton#Centroid_Method,
 QPushButton#MLS_Method,
 QPushButton#NormalConsistency,
 QPushButton#recon_ball,
+QPushButton#recon_cylinder,
 QPushButton#PCA_Method,
 QPushButton#coarseregistration {
     background-color: #edf2f7;
@@ -2743,6 +2843,7 @@ QPushButton#Centroid_Method:hover,
 QPushButton#MLS_Method:hover,
 QPushButton#NormalConsistency:hover,
 QPushButton#recon_ball:hover,
+QPushButton#recon_cylinder:hover,
 QPushButton#PCA_Method:hover,
 QPushButton#coarseregistration:hover {
     background-color: #e4ebf3;
@@ -2757,6 +2858,7 @@ QPushButton#Centroid_Method:pressed,
 QPushButton#MLS_Method:pressed,
 QPushButton#NormalConsistency:pressed,
 QPushButton#recon_ball:pressed,
+QPushButton#recon_cylinder:pressed,
 QPushButton#PCA_Method:pressed,
 QPushButton#coarseregistration:pressed {
     background-color: #d9e3ed;
@@ -3093,6 +3195,73 @@ void MainWindow::intial_window_connect()
     connect(jogPanel, &JogPanel::adjustBNegativeReleased,
             this, &MainWindow::adjustB_negative_released);
 
+    // 悬浮 JogPanel 的实体输入控件复用 MainWindow 的 PLC 写入与运动流程。
+    connect(jogPanel, &JogPanel::moveXRequested, this, [this](double target) {
+        sendRegistersAndVar(target, address_x1, address_x2, 500);
+    });
+    connect(jogPanel, &JogPanel::moveY1Requested, this, [this](double target) {
+        sendRegistersAndVar(target, address_y1, address_y2, 500);
+    });
+    connect(jogPanel, &JogPanel::moveY2Requested, this, [this](double target) {
+        sendRegistersAndVar(target, address_y12, address_y22, 500);
+    });
+    connect(jogPanel, &JogPanel::moveZ1Requested, this, [this](double target) {
+        sendRegistersAndVar(target, address_z1, address_z2, 500);
+    });
+    connect(jogPanel, &JogPanel::moveZ2Requested, this, [this](double target) {
+        sendRegistersAndVar(target, address_z12, address_z22, 500);
+    });
+    connect(jogPanel, &JogPanel::moveLargeRotateRequested, this, [this](double target) {
+        postPlcWriteHoldingRegisters(target, 0);
+        QTimer::singleShot(500, this, [this]() { postPlcMoveToAbsolutePosition(1, 7); });
+    });
+    connect(jogPanel, &JogPanel::moveSmallRotateRequested, this, [this](double target) {
+        sendRegistersAndVar(target, 60, 19, 500);
+    });
+    // 相对步进：用 PLC 最新反馈位置叠加步进值，再走既有绝对定位流程。
+    connect(jogPanel, &JogPanel::stepXRequested, this, [this](double step) {
+        sendRegistersAndVar(plcSnapshot.m_new_lizhu1_X + step, address_x1, address_x2, 500);
+    });
+    connect(jogPanel, &JogPanel::stepY1Requested, this, [this](double step) {
+        sendRegistersAndVar(plcSnapshot.m_new_sensor1_Y + step, address_y1, address_y2, 500);
+    });
+    connect(jogPanel, &JogPanel::stepZ1Requested, this, [this](double step) {
+        sendRegistersAndVar(plcSnapshot.m_new_sensor1_Z + step, address_z1, address_z2, 500);
+    });
+    connect(jogPanel, &JogPanel::stepY2Requested, this, [this](double step) {
+        sendRegistersAndVar(plcSnapshot.m_new_sensor2_Y + step, address_y12, address_y22, 500);
+    });
+    connect(jogPanel, &JogPanel::stepZ2Requested, this, [this](double step) {
+        sendRegistersAndVar(plcSnapshot.m_new_sensor2_Z + step, address_z12, address_z22, 500);
+    });
+    connect(jogPanel, &JogPanel::stepLargeRotateRequested, this, [this](double step) {
+        const double boundedStep = std::max(-180.0, std::min(180.0, step));
+        postPlcWriteHoldingRegisters(plcSnapshot.m_new_angle + boundedStep, 0);
+        QTimer::singleShot(500, this, [this]() { postPlcMoveToAbsolutePosition(1, 7); });
+    });
+    connect(jogPanel, &JogPanel::stepSmallRotateRequested, this, [this](double step) {
+        const double boundedStep = std::max(-180.0, std::min(180.0, step));
+        sendRegistersAndVar(plcSnapshot.m_small_angle + boundedStep, 60, 19, 500);
+    });
+
+    // 速度与绝对位置输入已迁移到悬浮面板，主界面仅保留打开面板的入口。
+    const QStringList migratedControlWidgets = {
+        QStringLiteral("label_235"), QStringLiteral("label_236"), QStringLiteral("label_250"),
+        QStringLiteral("label_237"), QStringLiteral("label_252"), QStringLiteral("label_241"), QStringLiteral("label_243"),
+        QStringLiteral("label_238"), QStringLiteral("label_239"), QStringLiteral("label_251"),
+        QStringLiteral("label_240"), QStringLiteral("label_253"), QStringLiteral("label_242"), QStringLiteral("label_244"),
+        QStringLiteral("daoguix_x"), QStringLiteral("daoguix_y"), QStringLiteral("daoguix_y_2"),
+        QStringLiteral("daoguix_z"), QStringLiteral("daoguix_z_2"), QStringLiteral("rotaiton_table"),
+        QStringLiteral("txtsmallRotate_angle_target"), QStringLiteral("Daogui_X"), QStringLiteral("Daogui_Y"),
+        QStringLiteral("Daogui_Y_2"), QStringLiteral("Daogui_Z"), QStringLiteral("Daogui_Z_2"),
+        QStringLiteral("rotation"), QStringLiteral("smallRotate_angle_move")
+    };
+    for(const QString& objectName : migratedControlWidgets)
+    {
+        if(QWidget* widget = findChild<QWidget*>(objectName))
+            widget->hide();
+    }
+
 }
 ///======================= PLC =======================///
 void MainWindow::initPlcRuntimeConnection()
@@ -3116,8 +3285,8 @@ void MainWindow::initPlcRuntimeConnection()
 
 void MainWindow::initial_velocity()
 {
-    on_btnPosition_Velocity_clicked() ; // 写入当前定位轴速度
-    on_btnRotate_Velocity_clicked() ; // 写入当前旋转轴速度
+    postPlcWriteHoldingRegisters(m_positionVelocity, 28);
+    postPlcWriteHoldingRegisters(m_rotateVelocity, 24);
 }
 
 void MainWindow::initPlcPaths()
@@ -3380,6 +3549,7 @@ void MainWindow::on_btnPosition_Velocity_clicked()
 {
     QString Velocity = ui->txtPosition_Velocity->text();
     double registers = Velocity.toDouble();
+    m_positionVelocity = registers;
     postPlcWriteHoldingRegisters(registers, 28);
 }
 
@@ -3404,7 +3574,7 @@ void MainWindow::on_btnRotate_Velocity_clicked()
 {
     QString Velocity = ui->txtRotate_Velocity->text();
     double registers = Velocity.toDouble();
-
+    m_rotateVelocity = registers;
     postPlcWriteHoldingRegisters(registers, 24);
 }
 
@@ -5411,14 +5581,6 @@ void MainWindow::on_Calculate_SL_clicked()
 
     appendSlLog(QStringLiteral("SL batch reconstruction started, folders=%1").arg(subpaths.size()));
 
-    QString baseName = baseParams.saveName.trimmed();
-    if(baseName.isEmpty())
-        baseName = QStringLiteral("sl_cloud.pcd");
-    if(!baseName.endsWith(QStringLiteral(".pcd"), Qt::CaseInsensitive))
-        baseName += QStringLiteral(".pcd");
-    QFileInfo baseInfo(baseName);
-    const QString stem = baseInfo.completeBaseName().isEmpty() ? QStringLiteral("sl_cloud") : baseInfo.completeBaseName();
-
     struct BatchItem { QString subpath; SlReconstructParams params; int index = 0; };
     struct BatchOutput { QString subpath; SlReconstructParams params; SlReconstructResult result; int index = 0; };
 
@@ -5433,7 +5595,10 @@ void MainWindow::on_Calculate_SL_clicked()
         item.subpath = absSub;
         item.params = baseParams;
         item.params.patternsSubPath = normalizedPathForSl(rootDir.relativeFilePath(absSub));
-        item.params.saveName = QStringLiteral("%1_%2.pcd").arg(stem).arg(seq++);
+        // 每一个批次对应一个直接子目录；输出文件和左侧列表均使用该目录名。
+        const QString folderName = QFileInfo(absSub).fileName().trimmed();
+        item.params.saveName = QStringLiteral("%1.pcd").arg(folderName);
+        ++seq;
         item.index = seq - 1;
         items.push_back(item);
     }
@@ -5616,10 +5781,13 @@ void MainWindow::Connect_executeStep()
         addPointCloudFileListItem(displayName,
                                   displayName,
                                   static_cast<int>(PointCloudEntryType::PointCloud),
-                                  -1);
+                                  -1,
+                                  newRow);
 
         if(ui->plainTextEdit)
-            ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Saved selected points to left list: ") + displayName);
+            ui->plainTextEdit->appendPlainText(systemTime() + " " +
+                                               tr("Saved selected points to left list: ") + displayName +
+                                               tr(" (%1 points)").arg(selectedCloud->size()));
     }, Qt::UniqueConnection);
 }
 
@@ -5993,6 +6161,16 @@ void MainWindow::saveSelectedPointCloudEntries()
 
     if(selectedRows.size() == 1)
     {
+        // 圆柱拟合结果需要通过 .pcpkg 保存其轴线和半径参数；
+        // STL/VTK/PLY 等几何格式只会保存网格，无法恢复拟合数据。
+        const QStandardItem* item = pointCloudListModel
+            ? pointCloudListModel->item(selectedRows.first().row()) : nullptr;
+        if(item && item->data(RoleEntryType).toInt() == static_cast<int>(PointCloudEntryType::FittedGeometry)
+           && cylinderFitResults.contains(item->data(RoleMeshIndex).toInt()))
+        {
+            savePointCloudPackage(selectedRows);
+            return;
+        }
         saveSinglePointCloudToFile(selectedRows.first().row());
         return;
     }
@@ -6289,8 +6467,31 @@ bool MainWindow::savePointCloudPackage(const QModelIndexList& selectedRows)
     ds.setVersion(QDataStream::Qt_5_15);
 
     const quint32 magic = 0x474B4350; // "PCKG"
-    const quint16 version = 3;
+    const quint16 version = 4;
     ds << magic << version;
+
+    // 圆柱几何已包含轴线参数；若用户同时选择了它的附属轴线，
+    // 只保存一次，载入时由圆柱参数重建轴线。
+    QSet<int> selectedCylinderMeshes;
+    for(const QModelIndex& idx : selectedRows)
+    {
+        const QStandardItem* item = pointCloudListModel->item(idx.row());
+        if(item && item->data(RoleEntryType).toInt() == static_cast<int>(PointCloudEntryType::FittedGeometry))
+        {
+            const int meshIndex = item->data(RoleMeshIndex).toInt();
+            if(cylinderFitResults.contains(meshIndex))
+                selectedCylinderMeshes.insert(meshIndex);
+        }
+    }
+
+    const auto isSelectedCylinderAxis = [this, &selectedCylinderMeshes](int lineIndex) {
+        for(int meshIndex : selectedCylinderMeshes)
+        {
+            if(cylinderFitResults.value(meshIndex).axisLineIndex == lineIndex)
+                return true;
+        }
+        return false;
+    };
 
     quint32 validCount = 0;
     for(const QModelIndex& idx : selectedRows)
@@ -6303,7 +6504,9 @@ bool MainWindow::savePointCloudPackage(const QModelIndexList& selectedRows)
             const int type = item->data(RoleEntryType).toInt();
             if(type == static_cast<int>(PointCloudEntryType::PointCloud) && item->data(RolePointCloudIndex).toInt() >= 0)
                 ++validCount;
-            else if(type == static_cast<int>(PointCloudEntryType::FittedAxisLine) && item->data(RoleLineIndex).toInt() >= 0)
+            else if(type == static_cast<int>(PointCloudEntryType::FittedAxisLine)
+                    && item->data(RoleLineIndex).toInt() >= 0
+                    && !isSelectedCylinderAxis(item->data(RoleLineIndex).toInt()))
                 ++validCount;
             else if(type != static_cast<int>(PointCloudEntryType::PointCloud)
                     && type != static_cast<int>(PointCloudEntryType::FittedAxisLine)
@@ -6345,7 +6548,7 @@ bool MainWindow::savePointCloudPackage(const QModelIndexList& selectedRows)
         else if(entryType == static_cast<int>(PointCloudEntryType::FittedAxisLine))
         {
             // 回转轴线：仅保存线段端点（点云），不含拓扑
-            if(lineIndex < 0)
+            if(lineIndex < 0 || isSelectedCylinderAxis(lineIndex))
                 continue;
             PCLCloud::Ptr line = ui->DicGLWidget->lineByIndex(lineIndex);
             if(!line)
@@ -6376,6 +6579,18 @@ bool MainWindow::savePointCloudPackage(const QModelIndexList& selectedRows)
                 for(std::uint32_t v : poly.vertices)
                     ds << static_cast<quint32>(v);
             }
+
+            // v4：仅圆柱拟合网格附带其解析参数；其它网格写入 false。
+            const auto cylinderIt = cylinderFitResults.constFind(meshIndex);
+            const bool hasCylinderFitData = (cylinderIt != cylinderFitResults.constEnd());
+            ds << hasCylinderFitData;
+            if(hasCylinderFitData)
+            {
+                const CylinderFitData& data = cylinderIt.value();
+                ds << data.axisPoint.x() << data.axisPoint.y() << data.axisPoint.z()
+                   << data.axisDirection.x() << data.axisDirection.y() << data.axisDirection.z()
+                   << data.radius << data.minAxisT << data.maxAxisT;
+            }
         }
     }
 
@@ -6401,7 +6616,7 @@ bool MainWindow::loadPointCloudPackage(const QString& packagePath)
     quint16 version = 0;
     quint32 itemCount = 0;
     ds >> magic >> version >> itemCount;
-    if(magic != 0x474B4350 || (version != 1 && version != 2 && version != 3))
+    if(magic != 0x474B4350 || (version != 1 && version != 2 && version != 3 && version != 4))
         return false;
 
     if(version == 1)
@@ -6520,11 +6735,55 @@ bool MainWindow::loadPointCloudPackage(const QString& packagePath)
                 pcl::toPCLPointCloud2(meshPoints, mesh.cloud);
                 mesh.polygons = std::move(polygons);
 
+                bool hasCylinderFitData = false;
+                CylinderFitData cylinderData;
+                if(version >= 4)
+                {
+                    ds >> hasCylinderFitData;
+                    if(hasCylinderFitData)
+                    {
+                        float axisPointX = 0.0f, axisPointY = 0.0f, axisPointZ = 0.0f;
+                        float axisDirX = 0.0f, axisDirY = 0.0f, axisDirZ = 0.0f;
+                        ds >> axisPointX >> axisPointY >> axisPointZ
+                           >> axisDirX >> axisDirY >> axisDirZ
+                           >> cylinderData.radius >> cylinderData.minAxisT >> cylinderData.maxAxisT;
+                        cylinderData.axisPoint = Eigen::Vector3f(axisPointX, axisPointY, axisPointZ);
+                        cylinderData.axisDirection = Eigen::Vector3f(axisDirX, axisDirY, axisDirZ);
+                        if(cylinderData.axisDirection.norm() < 1e-6f)
+                            hasCylinderFitData = false;
+                        else
+                            cylinderData.axisDirection.normalize();
+                    }
+                }
+
                 const int newMeshIndex = ui->DicGLWidget->addMesh(mesh);
                 addPointCloudFileListItem(packagePath, displayName,
                                           entryType,
                                           newMeshIndex,
                                           -1);
+
+                if(hasCylinderFitData && newMeshIndex >= 0)
+                {
+                    ui->DicGLWidget->setMeshDisplayTag(newMeshIndex, QStringLiteral("cylinder"));
+
+                    PCLCloud::Ptr axisLine(new PCLCloud);
+                    const Eigen::Vector3f axisStart = cylinderData.axisPoint
+                        + cylinderData.axisDirection * cylinderData.minAxisT;
+                    const Eigen::Vector3f axisEnd = cylinderData.axisPoint
+                        + cylinderData.axisDirection * cylinderData.maxAxisT;
+                    axisLine->points.emplace_back(axisStart.x(), axisStart.y(), axisStart.z());
+                    axisLine->points.emplace_back(axisEnd.x(), axisEnd.y(), axisEnd.z());
+                    axisLine->width = static_cast<uint32_t>(axisLine->points.size());
+                    axisLine->height = 1;
+                    axisLine->is_dense = true;
+
+                    cylinderData.axisLineIndex = ui->DicGLWidget->addLine(axisLine);
+                    const QString axisName = displayName + QStringLiteral("_Axis");
+                    addPointCloudFileListItem(packagePath, axisName,
+                                              static_cast<int>(PointCloudEntryType::FittedAxisLine),
+                                              -1, -1, cylinderData.axisLineIndex);
+                    cylinderFitResults.insert(newMeshIndex, cylinderData);
+                }
             }
         }
     }
@@ -7948,6 +8207,82 @@ void MainWindow::on_recon_ball_clicked(){
     ui->DicGLWidget->update();
 }
 
+// 圆柱体识别滤波：保留圆柱 RANSAC 内点并新增点云。
+void MainWindow::on_recon_cylinder_clicked()
+{
+    if(!ui || !ui->DicGLWidget || !ui->listWidgetPointCloudFiles ||
+       !ui->listWidgetPointCloudFiles->selectionModel() || !pointCloudListModel)
+    {
+        return;
+    }
+
+    const QModelIndexList selectedRows = ui->listWidgetPointCloudFiles->selectionModel()->selectedRows();
+    if(selectedRows.isEmpty())
+    {
+        QMessageBox::information(this, tr("Recon Cylinder"),
+                                 tr("Please select one point cloud entry first."));
+        return;
+    }
+
+    int successCount = 0;
+    for(const QModelIndex& idx : selectedRows)
+    {
+        const QStandardItem* item = pointCloudListModel->item(idx.row());
+        if(!item || item->data(RoleEntryType).toInt() != static_cast<int>(PointCloudEntryType::PointCloud))
+            continue;
+
+        const int cloudIndex = item->data(RolePointCloudIndex).toInt();
+        if(cloudIndex < 0)
+            continue;
+
+        PCLCloud::Ptr input = ui->DicGLWidget->pointCloudByIndex(cloudIndex);
+        if(!input || input->size() < 20)
+            continue;
+
+        // 与 Fit 中的圆柱拟合采用相同的法向约束 RANSAC 参数；仅输出内点，
+        // 因此可作为后续圆柱拟合与回转轴标定的预处理点云。
+        const auto result = Point_Algorithm::fitCylinder3D(input, 0.1, 2000, 0.5, 0.1f, 1e6f);
+        if(!result.success || !result.inliers || result.inliers->empty())
+            continue;
+
+        ui->DicGLWidget->add_pointcloud(*result.inliers);
+        const int newIndex = ui->DicGLWidget->pointCloudCount() - 1;
+
+        const QString baseName = item->text().trimmed().isEmpty()
+            ? QStringLiteral("cloud_%1").arg(cloudIndex + 1)
+            : item->text().trimmed();
+        const QString resultName = baseName + QStringLiteral("_ReconCylinder");
+        addPointCloudFileListItem(resultName, resultName,
+                                  static_cast<int>(PointCloudEntryType::PointCloud), -1, newIndex);
+
+        if(ui->plainTextEdit)
+        {
+            ui->plainTextEdit->appendPlainText(
+                systemTime() + " " + tr("ReconCylinder %1: inliers=%2, axisPoint=(%3,%4,%5), axisDir=(%6,%7,%8), r=%9")
+                    .arg(baseName)
+                    .arg(static_cast<int>(result.inliers->size()))
+                    .arg(result.axisPoint.x(), 0, 'f', 3)
+                    .arg(result.axisPoint.y(), 0, 'f', 3)
+                    .arg(result.axisPoint.z(), 0, 'f', 3)
+                    .arg(result.axisDirection.x(), 0, 'f', 6)
+                    .arg(result.axisDirection.y(), 0, 'f', 6)
+                    .arg(result.axisDirection.z(), 0, 'f', 6)
+                    .arg(result.radius, 0, 'f', 3));
+        }
+
+        ++successCount;
+    }
+
+    if(successCount <= 0)
+    {
+        QMessageBox::warning(this, tr("Recon Cylinder"),
+                             tr("No selected point cloud could be recognized as cylinder."));
+        return;
+    }
+
+    ui->DicGLWidget->update();
+}
+
 
 // 球面识别：保留 RANSAC 内点并新增点云。
 // 对选中的点云执行几何体拟合（球/圆柱/平面/圆），并将拟合结果网格化显示。
@@ -8048,17 +8383,32 @@ void MainWindow::on_Fit_clicked()
 
     // Batch naming: ask for base name when fitting multiple items
     QString fitBaseName;
-    if(fitInputs.size() > 1)
+    if(fitInputs.size() > 1 && fitKey != QStringLiteral("cylinder"))
     {
-        const QString defaultName = fitInputs.front().baseName + QStringLiteral("_Sphere");
+        const QString fitObjectName = fitKey == QStringLiteral("cylinder")
+            ? tr("cylinders") : tr("spheres");
+        const QString fitSuffix = fitKey == QStringLiteral("cylinder")
+            ? QStringLiteral("_Cylinder") : QStringLiteral("_Sphere");
+        const QString defaultName = fitInputs.front().baseName + fitSuffix;
         bool ok = false;
         fitBaseName = QInputDialog::getText(this, tr("Batch Fit Naming"),
-                                             tr("Enter base name for fitted spheres:"),
+                                             tr("Enter base name for fitted %1:").arg(fitObjectName),
                                              QLineEdit::Normal, defaultName, &ok);
         if(!ok)
             return;
         if(fitBaseName.trimmed().isEmpty())
             fitBaseName = defaultName;
+    }
+
+    QSet<QString> usedCylinderResultNames;
+    if(fitKey == QStringLiteral("cylinder"))
+    {
+        for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
+        {
+            const QStandardItem* item = pointCloudListModel->item(row);
+            if(item)
+                usedCylinderResultNames.insert(item->text().trimmed().toCaseFolded());
+        }
     }
 
     for(const FitInputEntry& entry : fitInputs)
@@ -8568,7 +8918,30 @@ void MainWindow::on_Fit_clicked()
             if(!result.success)
                 continue;
 
-            const PCLMesh mesh = buildCylinderMesh(result.axisPoint, result.axisDirection, result.radius, entry.cloud, 100, 120);
+            Eigen::Vector3f axisDirection = result.axisDirection;
+            if(axisDirection.norm() < 1e-6f)
+                continue;
+            axisDirection.normalize();
+
+            // 使用原始输入点在轴向的投影范围确定有限轴线长度；
+            // 该范围同时用于圆柱面和轴线的显示。
+            float minAxisT = std::numeric_limits<float>::max();
+            float maxAxisT = -std::numeric_limits<float>::max();
+            for(const auto& point : entry.cloud->points)
+            {
+                const Eigen::Vector3f p(point.x, point.y, point.z);
+                const float t = (p - result.axisPoint).dot(axisDirection);
+                minAxisT = std::min(minAxisT, t);
+                maxAxisT = std::max(maxAxisT, t);
+            }
+            if(!std::isfinite(minAxisT) || !std::isfinite(maxAxisT) ||
+               maxAxisT - minAxisT < 1e-4f)
+            {
+                minAxisT = -result.radius;
+                maxAxisT = result.radius;
+            }
+
+            const PCLMesh mesh = buildCylinderMesh(result.axisPoint, axisDirection, result.radius, entry.cloud, 100, 120);
             if(mesh.polygons.empty())
                 continue;
 
@@ -8577,12 +8950,71 @@ void MainWindow::on_Fit_clicked()
                 continue;
             ui->DicGLWidget->setMeshDisplayTag(meshIndex, QStringLiteral("cylinder"));
 
-            const QString resultName = entry.baseName + QStringLiteral("_FitCylinder");
+            // 圆柱结果始终保留各自输入点云名称；只有名称冲突时才补序号，
+            // 这样同一批中不同姿态（如 s0、s90）在轴线标定时可直接区分。
+            const QString nameBase = entry.baseName + QStringLiteral("_FitCylinder");
+            QString resultName = nameBase;
+            int suffix = 2;
+            while(usedCylinderResultNames.contains(resultName.toCaseFolded()))
+                resultName = QStringLiteral("%1_%2").arg(nameBase).arg(suffix++);
+            usedCylinderResultNames.insert(resultName.toCaseFolded());
             addPointCloudFileListItem(resultName, resultName,
                                       static_cast<int>(PointCloudEntryType::FittedGeometry), meshIndex, -1, -1);
+            const quint64 cylinderItemId = pointCloudListModel && pointCloudListModel->rowCount() > 0
+                ? pointCloudListModel->item(pointCloudListModel->rowCount() - 1)->data(RoleUniqueId).toULongLong()
+                : 0;
+
+            PCLCloud::Ptr axisLine(new PCLCloud);
+            const Eigen::Vector3f axisStart = result.axisPoint + axisDirection * minAxisT;
+            const Eigen::Vector3f axisEnd = result.axisPoint + axisDirection * maxAxisT;
+            axisLine->points.emplace_back(axisStart.x(), axisStart.y(), axisStart.z());
+            axisLine->points.emplace_back(axisEnd.x(), axisEnd.y(), axisEnd.z());
+            axisLine->width = static_cast<uint32_t>(axisLine->points.size());
+            axisLine->height = 1;
+            axisLine->is_dense = true;
+
+            const int axisLineIndex = ui->DicGLWidget->addLine(axisLine);
+            const QString axisName = resultName + QStringLiteral("_Axis");
+            addPointCloudFileListItem(axisName, axisName,
+                                      static_cast<int>(PointCloudEntryType::FittedAxisLine), -1, -1, axisLineIndex);
+            const quint64 axisItemId = pointCloudListModel && pointCloudListModel->rowCount() > 0
+                ? pointCloudListModel->item(pointCloudListModel->rowCount() - 1)->data(RoleUniqueId).toULongLong()
+                : 0;
+
+            cylinderFitResults[meshIndex] = { result.axisPoint, axisDirection, result.radius,
+                                               minAxisT, maxAxisT, axisLineIndex };
+
+            // 圆柱面和轴线分开归类，批量拟合后可折叠分组且不会交叉混排。
+            assignPointCloudItemToGroup(cylinderItemId, QStringLiteral("Cylinder Fits"));
+            assignPointCloudItemToGroup(axisItemId, QStringLiteral("Cylinder Axes"));
+            refreshPointCloudGroupView();
+            refreshPointCloudWorkspaceState();
+
+            if(ui->plainTextEdit)
+            {
+                ui->plainTextEdit->appendPlainText(
+                    systemTime() + " " + tr("Cylinder fit: axisPoint=(%1,%2,%3), axisDir=(%4,%5,%6), radius=%7")
+                        .arg(result.axisPoint.x(), 0, 'f', 3)
+                        .arg(result.axisPoint.y(), 0, 'f', 3)
+                        .arg(result.axisPoint.z(), 0, 'f', 3)
+                        .arg(axisDirection.x(), 0, 'f', 6)
+                        .arg(axisDirection.y(), 0, 'f', 6)
+                        .arg(axisDirection.z(), 0, 'f', 6)
+                        .arg(result.radius, 0, 'f', 3));
+            }
 
             if(pointCloudListModel)
-                lastAddedIndex = pointCloudListModel->index(pointCloudListModel->rowCount() - 1, 0);
+            {
+                for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
+                {
+                    QStandardItem* item = pointCloudListModel->item(row);
+                    if(item && item->data(RoleUniqueId).toULongLong() == axisItemId)
+                    {
+                        lastAddedIndex = pointCloudListModel->index(row, 0);
+                        break;
+                    }
+                }
+            }
         }
         else if(fitKey == QStringLiteral("circle3d"))
         {
@@ -8658,6 +9090,23 @@ void MainWindow::on_AxisCalibrate_clicked()
     if(!ui || !ui->DicGLWidget || !ui->listWidgetPointCloudFiles || !ui->listWidgetPointCloudFiles->selectionModel() || !pointCloudListModel)
         return;
 
+    QString fitKey;
+    if(ui->Fit_select)
+    {
+        fitKey = ui->Fit_select->currentData().toString().trimmed().toLower();
+        if(fitKey.isEmpty())
+        {
+            const QString fitText = ui->Fit_select->currentText().trimmed();
+            if(fitText == QStringLiteral("圆柱"))
+                fitKey = QStringLiteral("cylinder");
+            else if(fitText == QStringLiteral("球"))
+                fitKey = QStringLiteral("sphere");
+        }
+    }
+    if(fitKey.isEmpty())
+        fitKey = QStringLiteral("sphere");
+    const bool useCylinderAxes = (fitKey == QStringLiteral("cylinder"));
+
     QModelIndexList selectedRows = ui->listWidgetPointCloudFiles->selectionModel()->selectedRows();
     if(selectedRows.isEmpty())
     {
@@ -8666,7 +9115,60 @@ void MainWindow::on_AxisCalibrate_clicked()
             selectedRows << current;
     }
 
-    if(selectedRows.isEmpty())
+    std::vector<int> selectedCylinderMeshes;
+    if(useCylinderAxes)
+    {
+        // 圆柱轴线在三维视图中会相互交叉，不再要求用户从视图或主列表
+        // 框选；改为在独立列表中勾选参与标定的圆柱拟合结果。
+        QDialog chooseDialog(this);
+        chooseDialog.setWindowTitle(tr("Select cylinder fits for axis calibration"));
+        auto* layout = new QVBoxLayout(&chooseDialog);
+        auto* hint = new QLabel(tr("Check the same cylinder fitted at at least 3 different rotation angles."), &chooseDialog);
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+
+        auto* list = new QListWidget(&chooseDialog);
+        list->setSelectionMode(QAbstractItemView::NoSelection);
+        for(int row = 0; row < pointCloudListModel->rowCount(); ++row)
+        {
+            const QStandardItem* item = pointCloudListModel->item(row);
+            if(!item || item->data(RoleEntryType).toInt() != static_cast<int>(PointCloudEntryType::FittedGeometry))
+                continue;
+
+            const int meshIndex = item->data(RoleMeshIndex).toInt();
+            if(!cylinderFitResults.contains(meshIndex))
+                continue;
+
+            auto* choice = new QListWidgetItem(item->text(), list);
+            choice->setData(Qt::UserRole, meshIndex);
+            choice->setFlags(choice->flags() | Qt::ItemIsUserCheckable);
+            choice->setCheckState(Qt::Unchecked);
+        }
+        layout->addWidget(list);
+
+        if(list->count() == 0)
+        {
+            QMessageBox::information(this, tr("Axis Calibrate"),
+                                     tr("No saved fitted cylinder results are available."));
+            return;
+        }
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &chooseDialog);
+        connect(buttons, &QDialogButtonBox::accepted, &chooseDialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &chooseDialog, &QDialog::reject);
+        layout->addWidget(buttons);
+
+        if(chooseDialog.exec() != QDialog::Accepted)
+            return;
+
+        for(int i = 0; i < list->count(); ++i)
+        {
+            const QListWidgetItem* choice = list->item(i);
+            if(choice->checkState() == Qt::Checked)
+                selectedCylinderMeshes.push_back(choice->data(Qt::UserRole).toInt());
+        }
+    }
+    else if(selectedRows.isEmpty())
     {
         QMessageBox::information(this, tr("Axis Calibrate"), tr("Please select fitted sphere result(s) first."));
         return;
@@ -8674,6 +9176,13 @@ void MainWindow::on_AxisCalibrate_clicked()
 
     std::vector<Eigen::Vector3f> centers;
     centers.reserve(static_cast<std::size_t>(selectedRows.size()) * 8);
+    std::vector<Eigen::Vector3f> cylinderAxisPoints;
+    std::vector<Eigen::Vector3f> cylinderAxisDirections;
+    if(useCylinderAxes)
+    {
+        cylinderAxisPoints.reserve(selectedCylinderMeshes.size());
+        cylinderAxisDirections.reserve(selectedCylinderMeshes.size());
+    }
 
     auto meshCentroid = [](const PCLMesh& mesh, Eigen::Vector3f& c) -> bool {
         pcl::PointCloud<pcl::PointXYZ> pts;
@@ -8695,7 +9204,21 @@ void MainWindow::on_AxisCalibrate_clicked()
             centers.emplace_back(p.x, p.y, p.z);
     };
 
-    for(const QModelIndex& idx : selectedRows)
+    if(useCylinderAxes)
+    {
+        for(int meshIndex : selectedCylinderMeshes)
+        {
+            if(!cylinderFitResults.contains(meshIndex))
+                continue;
+
+            const CylinderFitData& cylinder = cylinderFitResults[meshIndex];
+            // 直接传入整条圆柱轴线。axisPoint 可为轴线上任意点，算法不使用
+            // 有限显示段的中点，因此不会受每次扫描截取长度变化影响。
+            cylinderAxisPoints.push_back(cylinder.axisPoint);
+            cylinderAxisDirections.push_back(cylinder.axisDirection);
+        }
+    }
+    else for(const QModelIndex& idx : selectedRows)
     {
         const QStandardItem* item = pointCloudListModel->item(idx.row());
         if(!item)
@@ -8737,9 +9260,13 @@ void MainWindow::on_AxisCalibrate_clicked()
         }
     }
 
-    if(centers.size() < 3)
+    const std::size_t calibrationItemCount = useCylinderAxes ? cylinderAxisPoints.size() : centers.size();
+    if(calibrationItemCount < 3)
     {
-        QMessageBox::warning(this, tr("Axis Calibrate"), tr("At least 3 valid points are required (from sphere centers or selected point cloud points)."));
+        QMessageBox::warning(this, tr("Axis Calibrate"),
+                             useCylinderAxes
+                                 ? tr("At least 3 valid fitted cylinder axes from different rotation angles are required.")
+                                 : tr("At least 3 valid points are required (from sphere centers or selected point cloud points)."));
         return;
     }
 
@@ -8747,7 +9274,7 @@ void MainWindow::on_AxisCalibrate_clicked()
 
     auto* watcher = new QFutureWatcher<Point_Algorithm::RotationAxisFitResult>(this);
     connect(watcher, &QFutureWatcher<Point_Algorithm::RotationAxisFitResult>::finished,
-            this, [this, watcher, centers]() {
+            this, [this, watcher, centers, cylinderAxisPoints, useCylinderAxes]() {
                 const Point_Algorithm::RotationAxisFitResult r = watcher->result();
                 watcher->deleteLater();
                 if(ui && ui->AxisCalibrate)
@@ -8772,7 +9299,9 @@ void MainWindow::on_AxisCalibrate_clicked()
                 {
                     ui->DicGLWidget->add_pointcloud(*r.circle3D);
                     const int circleCloudIndex = ui->DicGLWidget->pointCloudCount() - 1;
-                    const QString circleName = QStringLiteral("AxisCalibrate_Circle");
+                    const QString circleName = useCylinderAxes
+                        ? QStringLiteral("AxisCalibrate_CylinderAxisTrajectory")
+                        : QStringLiteral("AxisCalibrate_Circle");
                     addPointCloudFileListItem(circleName,
                                               circleName,
                                               static_cast<int>(PointCloudEntryType::PointCloud),
@@ -8781,10 +9310,11 @@ void MainWindow::on_AxisCalibrate_clicked()
                                               -1);
                 }
 
-                // 由球心范围构造轴线段
+                // 由输入数据范围构造轴线段；圆柱模式仅用于显示长度，不参与拟合。
                 float minT = std::numeric_limits<float>::max();
                 float maxT = -std::numeric_limits<float>::max();
-                for(const auto& c : centers)
+                const std::vector<Eigen::Vector3f>& extentPoints = useCylinderAxes ? cylinderAxisPoints : centers;
+                for(const auto& c : extentPoints)
                 {
                     const float t = (c - r.axisPoint).dot(r.axisDirection);
                     minT = std::min(minT, t);
@@ -8814,7 +9344,9 @@ void MainWindow::on_AxisCalibrate_clicked()
                 axisLine->is_dense = true;
 
                 const int lineIndex = ui->DicGLWidget->addLine(axisLine);
-                const QString axisName = QStringLiteral("AxisCalibrate_RotationAxis");
+                const QString axisName = useCylinderAxes
+                    ? QStringLiteral("AxisCalibrate_CylinderRotationAxis")
+                    : QStringLiteral("AxisCalibrate_RotationAxis");
                 addPointCloudFileListItem(axisName,
                                           axisName,
                                           static_cast<int>(PointCloudEntryType::FittedAxisLine),
@@ -8824,24 +9356,45 @@ void MainWindow::on_AxisCalibrate_clicked()
 
                 if(ui && ui->plainTextEdit)
                 {
-                    ui->plainTextEdit->appendPlainText(
-                        systemTime() + " " + tr("Axis fit: point=(%1,%2,%3), dir=(%4,%5,%6), radius=%7, planeRMSE=%8, circleRMSE=%9")
-                            .arg(r.axisPoint.x(), 0, 'f', 6)
-                            .arg(r.axisPoint.y(), 0, 'f', 6)
-                            .arg(r.axisPoint.z(), 0, 'f', 6)
-                            .arg(r.axisDirection.x(), 0, 'f', 6)
-                            .arg(r.axisDirection.y(), 0, 'f', 6)
-                            .arg(r.axisDirection.z(), 0, 'f', 6)
-                            .arg(r.radius, 0, 'f', 6)
-                            .arg(r.planeRMSE, 0, 'f', 6)
-                            .arg(r.circleRMSE, 0, 'f', 6));
+                    if(useCylinderAxes)
+                    {
+                        const float parallelAngleDeg = std::asin(std::min(1.0f, std::max(0.0f, r.planeRMSE)))
+                            * 180.0f / static_cast<float>(M_PI);
+                        ui->plainTextEdit->appendPlainText(
+                            systemTime() + " " + tr("Cylinder-axis virtual cylinder fit: point=(%1,%2,%3), dir=(%4,%5,%6), radius=%7, parallelRMSE=%8 deg, radialRMSE=%9")
+                                .arg(r.axisPoint.x(), 0, 'f', 6)
+                                .arg(r.axisPoint.y(), 0, 'f', 6)
+                                .arg(r.axisPoint.z(), 0, 'f', 6)
+                                .arg(r.axisDirection.x(), 0, 'f', 6)
+                                .arg(r.axisDirection.y(), 0, 'f', 6)
+                                .arg(r.axisDirection.z(), 0, 'f', 6)
+                                .arg(r.radius, 0, 'f', 6)
+                                .arg(parallelAngleDeg, 0, 'f', 6)
+                                .arg(r.circleRMSE, 0, 'f', 6));
+                    }
+                    else
+                    {
+                        ui->plainTextEdit->appendPlainText(
+                            systemTime() + " " + tr("Sphere axis fit: point=(%1,%2,%3), dir=(%4,%5,%6), radius=%7, planeRMSE=%8, circleRMSE=%9")
+                                .arg(r.axisPoint.x(), 0, 'f', 6)
+                                .arg(r.axisPoint.y(), 0, 'f', 6)
+                                .arg(r.axisPoint.z(), 0, 'f', 6)
+                                .arg(r.axisDirection.x(), 0, 'f', 6)
+                                .arg(r.axisDirection.y(), 0, 'f', 6)
+                                .arg(r.axisDirection.z(), 0, 'f', 6)
+                                .arg(r.radius, 0, 'f', 6)
+                                .arg(r.planeRMSE, 0, 'f', 6)
+                                .arg(r.circleRMSE, 0, 'f', 6));
+                    }
                 }
 
                 ui->DicGLWidget->update();
             }, Qt::QueuedConnection);
 
-    watcher->setFuture(QtConcurrent::run([centers]() {
-        return Point_Algorithm::fitRotationAxisFromCenters(centers);
+    watcher->setFuture(QtConcurrent::run([centers, cylinderAxisPoints, cylinderAxisDirections, useCylinderAxes]() {
+        return useCylinderAxes
+            ? Point_Algorithm::fitRotationAxisFromLines(cylinderAxisPoints, cylinderAxisDirections)
+            : Point_Algorithm::fitRotationAxisFromCenters(centers);
     }));
 }
 
@@ -10861,8 +11414,8 @@ void MainWindow::stop_timer()
 
      // mahrTimer->stop();
 
-     double jogVelocity = ui->keyPosition_Velocity->text().toDouble();
-     postPlcWriteHoldingRegisters(jogVelocity, 28);
+     m_jogVelocity = ui->keyPosition_Velocity->text().toDouble();
+     postPlcWriteHoldingRegisters(m_jogVelocity, 28);
 
      // double target = (dir == JogDir::Positive) ? 1000.0 : -1000.0;
 
@@ -10909,8 +11462,10 @@ void MainWindow::stop_timer()
          if (currentJogAxis != axis || currentJogDir != dir)
              return;
 
-         // sendRegistersAndVar(target, addr1, addr2, 500);
-         postPlcMoveToAbsolutePosition(1, addr2); // 线圈触发启动
+         // 点动方向线圈必须在按钮按住期间保持为 1。
+         // moveToAbsolutePosition() 会在 100 ms 后自动复位线圈，
+         // 用它启动点动会导致按住时也只产生一次短脉冲。
+         postPlcStartContinuousMovement(1, addr2);
          jogBusy = false;
          // mahrTimer->start(100);
 
@@ -10953,13 +11508,13 @@ void MainWindow::stop_timer()
     }
 
     if (addr2 != 0)
-        postPlcMoveToAbsolutePosition(0, addr2);
+        // 与启动配对，松开按钮时立即撤销保持的方向线圈。
+        postPlcStartContinuousMovement(0, addr2);
 
      int restoreId = ++speedRestoreId;
      QTimer::singleShot(RESTORE_SPEED_DELAY_MS, this, [=]() {
          if (restoreId == speedRestoreId && !jogActive) {
-             double velocityNormal = ui->txtPosition_Velocity->text().toDouble();
-             postPlcWriteHoldingRegisters(velocityNormal, 28);
+             postPlcWriteHoldingRegisters(m_positionVelocity, 28);
          }
      });
 

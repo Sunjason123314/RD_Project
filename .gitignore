@@ -46,6 +46,7 @@ CMakeLists.txt.user.*
 *.autosave
 
 # ===== 压缩包 / 大文件 =====
+data/
 *.zip
 *.7z
 *.rar

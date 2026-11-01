@@ -238,6 +238,12 @@ public:
     // 多球心回转轴拟合（非RANSAC）：3点几何解，3点以上最小二乘平面+2D圆拟合。
     static RotationAxisFitResult fitRotationAxisFromCenters(const std::vector<Eigen::Vector3f>& centers);
 
+    // 多条与回转轴近似平行的圆柱轴线联合标定回转轴（虚拟圆柱拟合）。
+    // 先以最小二乘估计共同方向，再把各直线投影到其垂直平面并拟合圆轨迹；
+    // linePoints 可为各轴线上的任意点，因此不受点云截取长度或轴线中点漂移影响。
+    static RotationAxisFitResult fitRotationAxisFromLines(const std::vector<Eigen::Vector3f>& linePoints,
+                                                          const std::vector<Eigen::Vector3f>& lineDirections);
+
     // 采样平面补丁：根据参考点云尺度生成一块可视化平面点云。
     static PCLCloud::Ptr samplePlanePatch(const Eigen::Vector4f& plane,
                                           const PCLCloud::Ptr& reference,
