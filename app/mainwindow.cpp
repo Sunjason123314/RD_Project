@@ -16,10 +16,6 @@
 #include "pointcloud/pointcloudlistview.h"
 
 
-#include <QtCharts/QLineSeries>
-#include <QtCharts/QPolarChart>
-#include <QtCharts/QValueAxis>
-#include <QtCharts/QChartView>
 #include <QGridLayout>
 #include <QSplitter>
 #include <QHBoxLayout>
@@ -81,7 +77,6 @@
 #include "pointcloud/stepexporter.h"
 #include "pointcloud/stepimporter.h"
 
-using namespace QtCharts;
 
 
 
@@ -92,16 +87,8 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
     , calibration(new Calibration(this))
     , fileReaderWriter(new File_Read_Write(this))
-    , plcController(nullptr)
-    , jogPanel(nullptr)
-    // , m_hardwaredataprovider(new  plcController,HardwareDataProvider(this))
 {
     ui->setupUi(this);
-
-    // 启动时即把光谱共焦的 5 个设置分页移入独立对话框，使主界面 tabWidget_tri
-    // 一开始就只保留其余分页（对话框此时不显示，点菜单 actionCF_Sensor 才弹出）。
-    initConfocalSettingsDialog();
-
     // 把主 Tab 与信息输出框放进上下 QSplitter，使二者之间的分隔条可拖动调整高度。
     setupCentralSplitter();
 
@@ -120,7 +107,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_stepProgressBar->hide();
 
     qApp->installEventFilter(this);
-    this->setWindowTitle(tr("auto measurement"));
+    this->setWindowTitle(tr("RD_Project"));
     this->setAcceptDrops(true);
 
     IGXFactory::GetInstance().Init();
@@ -133,13 +120,11 @@ MainWindow::MainWindow(QWidget *parent)
 
     g_Global = ShareResource::get_instance();
     initThreadManager();
-    initPlcThread();
     initConfocalSensorThread();
     // DLP 不再预创建线程；改为点击“显示”按钮时在主线程直接 new DLP（对齐 qt_camera）。
     initPointCloudThread();
     initFloatingMainTabs();
   
-    connect(this ,&MainWindow::emit_move_motor,this,&MainWindow::move_motor);
     initial_UI();
     setupPointCloudWorkspaceUi();
     stylePointCloudWorkspace();
@@ -148,22 +133,11 @@ MainWindow::MainWindow(QWidget *parent)
     ui->groupnumber->setMinimum(1);
     ui->picturenumber->setMinimum(1);
 
-    initPaths();
-    initPlcPaths();
-
     initRuntimeBuffers();
     initTimers();
 
-    // 绑定信号槽
-    intial_window_connect();
     // 三维框选菜单“Save selected points to list”的信号连接。
     Connect_executeStep();
-
-    initPlcRuntimeConnection();
-    initChartContainer();
-    updatePolarChart(cgqpxht, jiaodupxht);
-
-
 
 }
 
@@ -1738,18 +1712,82 @@ void MainWindow::initConfocalSensorThread()
             this, [this](bool connected, int connectStatus) {
                 if(!connected)
                 {
+                    autoStartSamplingAfterDark = false;
                     ui->plainTextEdit->appendPlainText(
                         systemTime() + " " + tr("Device connection verification failed!") +
                         QStringLiteral(" (%1)").arg(connectStatus));
                     return;
                 }
 
-                ui->actionLink->setText(tr("鏂紑"));
+                ui->actionLink->setText(tr("断开"));
                 ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Connection successful!"));
                 g_Global->g_isConnect = true;
 
                 SingleChannelModeInit();
                 getStatusBarResult();
+
+                if(autoStartSamplingAfterDark && confocalWorker)
+                {
+                    ui->plainTextEdit->appendPlainText(
+                        systemTime() + " Running Dark before automatic sampling...");
+                    QMetaObject::invokeMethod(confocalWorker,
+                                              "darkSignal",
+                                              Qt::QueuedConnection,
+                                              Q_ARG(int, g_Global->singleChannelIndex));
+                }
+            }, Qt::QueuedConnection);
+
+    connect(confocalWorker, &ConfocalSensorWorker::autoConnectionOpened,
+            this, [this](int handle) {
+                g_Global->g_handle = handle;
+                g_Global->g_isCF3000Lite = false;
+                autoStartSamplingAfterDark = true;
+            }, Qt::QueuedConnection);
+
+    connect(confocalWorker, &ConfocalSensorWorker::autoConnectionAttemptFinished,
+            this, [this](bool connected) {
+                if(connected)
+                {
+                    autoConnectCF4000Attempts = 0;
+                    return;
+                }
+
+                g_Global->g_handle = 0;
+
+                if(autoConnectCF4000Attempts >= 5)
+                {
+                    ui->plainTextEdit->appendPlainText(
+                        systemTime() + " CF4000 was not found after 5 attempts.");
+                    return;
+                }
+
+                QTimer::singleShot(1000, this, [this]() {
+                    startAutoConnectCF4000Attempt();
+                });
+            }, Qt::QueuedConnection);
+
+    connect(confocalWorker, &ConfocalSensorWorker::darkSignalFinished,
+            this, [this](bool succeeded, int channelIndex) {
+                if(!autoStartSamplingAfterDark)
+                    return;
+
+                autoStartSamplingAfterDark = false;
+                if(!succeeded)
+                {
+                    ui->plainTextEdit->appendPlainText(
+                        systemTime() + " Dark failed; automatic sampling was not started.");
+                    return;
+                }
+
+                if(!g_Global->g_isConnect || g_Global->g_isStart || !confocalWorker)
+                    return;
+
+                ui->plainTextEdit->appendPlainText(
+                    systemTime() + " Dark completed; starting automatic sampling...");
+                QMetaObject::invokeMethod(confocalWorker,
+                                          "startSample",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(int, channelIndex));
             }, Qt::QueuedConnection);
 
     // 绑定信号槽
@@ -1775,14 +1813,14 @@ void MainWindow::initConfocalSensorThread()
                 {
                     confTimer->start();
                     StatusBarTimer->start();
-                    ui->actionStart->setText(tr("鍋滄"));
+                    ui->actionStart->setText(tr("停止"));
                     ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Sensor sampling activated!"));
                 }
                 else
                 {
                     confTimer->stop();
                     StatusBarTimer->stop();
-                    ui->actionStart->setText(tr("鍚姩"));
+                    ui->actionStart->setText(tr("启动"));
                     ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("Sensor sampling stops!"));
                 }
             }, Qt::QueuedConnection);
@@ -1796,10 +1834,11 @@ void MainWindow::initConfocalSensorThread()
                     StatusBarTimer->stop();
 
                 ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("The device is closed!"));
-                ui->actionLink->setText(tr("杩炴帴"));
+                ui->actionLink->setText(tr("连接"));
                 g_Global->g_handle = 0;
                 g_Global->g_isConnect = false;
                 g_Global->g_isStart = false;
+                autoStartSamplingAfterDark = false;
 
                 statusBarInit();
 
@@ -1855,183 +1894,30 @@ void MainWindow::initConfocalSensorThread()
                                    "closeDevice"))
     {
         confocalWorker = nullptr;
+        return;
     }
+
+    QTimer::singleShot(0, this, [this]() {
+        startAutoConnectCF4000Attempt();
+    });
 }
 
-void MainWindow::initPlcThread()
+void MainWindow::startAutoConnectCF4000Attempt()
 {
-    // 注册跨线程信号槽所需的元类型
-    qRegisterMetaType<PlcDataSnapshot>("PlcDataSnapshot");
-
-    if(!threadManager)
-        initThreadManager();
-
-    if(plcController)
+    if(!confocalWorker || g_Global->g_isConnect || autoConnectCF4000Attempts >= 5)
         return;
 
-    // 创建工作线程对象
-    plcController = new Plc;
-
-    // 绑定信号槽
-    connect(plcController, &Plc::dataUpdated,
-            this, &MainWindow::updatePlcSnapshot,
-            Qt::QueuedConnection);
-
-    // 绑定信号槽
-    connect(plcController, &Plc::plcConnectionStateReady,
-            this, [this](bool connected) {
-                plcConnectedFlag = connected;
-            }, Qt::QueuedConnection);
-
-    // 绑定信号槽
-    connect(plcController, &Plc::plcConnected,
-            this, [this]() {
-                plcConnectedFlag = true;
-
-                if(mahrTimer && !mahrTimer->isActive())
-                    mahrTimer->start(100);
-
-                ui->plainTextEdit->appendPlainText(systemTime() + " PLC连接成功");
-            }, Qt::QueuedConnection);
-
-    connect(plcController, &Plc::plcDisconnected,
-            this, [this]() {
-                plcConnectedFlag = false;
-
-                if(mahrTimer && mahrTimer->isActive())
-                    mahrTimer->stop();
-
-                ui->plainTextEdit->appendPlainText(systemTime() + " PLC已断开");
-            }, Qt::QueuedConnection);
-
-    connect(plcController, &Plc::plcError,
-            this, [this](const QString &err) {
-                plcConnectedFlag = false;
-
-                if(mahrTimer && mahrTimer->isActive())
-                    mahrTimer->stop();
-
-                ui->plainTextEdit->appendPlainText(systemTime() + " PLC杩炴帴閿欒: " + err);
-            }, Qt::QueuedConnection);
-
-    // 参数校验，无效时提前返回。
-    if(!threadManager->startModule(ThreadManager::Module::Plc,
-                                   plcController,
-                                   QStringLiteral("PlcThread"),
-                                   "disconnectPlc"))
-    {
-        plcController = nullptr;
-        plcConnectedFlag = false;
-    }
-}
-
-void MainWindow::shutdownPlcThread()
-{
-    // 参数校验，无效时提前返回。
-    if(mahrTimer)
-        mahrTimer->stop();
-
-    if(threadManager)
-        threadManager->stopModule(ThreadManager::Module::Plc, 3000);
-
-    plcController = nullptr;
-    plcConnectedFlag = false;
-}
-
-void MainWindow::updatePlcSnapshot(const PlcDataSnapshot& snapshot)
-{
-    plcSnapshot = snapshot;
-}
-
-void MainWindow::postPlcConnect()
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "connectPlc",
+    ++autoConnectCF4000Attempts;
+    ui->plainTextEdit->appendPlainText(
+        systemTime() + QStringLiteral(" Searching for a CF4000 device (%1/5)...")
+                           .arg(autoConnectCF4000Attempts));
+    QMetaObject::invokeMethod(confocalWorker,
+                              "autoConnectCF4000",
                               Qt::QueuedConnection);
-}
-
-void MainWindow::postPlcDisconnect()
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "disconnectPlc",
-                              Qt::QueuedConnection);
-}
-
-void MainWindow::postPlcStartCollectingData()
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "startCollectingData",
-                              Qt::QueuedConnection);
-}
-
-void MainWindow::postPlcStartContinuousMovement(double cylinder, double address)
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "startContinuousMovement",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, cylinder),
-                              Q_ARG(double, address));
-}
-
-void MainWindow::postPlcMoveToAbsolutePosition(double cylinder, double address)
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "moveToAbsolutePosition",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, cylinder),
-                              Q_ARG(double, address));
-}
-
-void MainWindow::postPlcWriteHoldingRegisters(double registers, double address)
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "writeHoldingRegisters",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, registers),
-                              Q_ARG(double, address));
-}
-
-void MainWindow::postPlcWriteCoilData(double value, double address)
-{
-    if(!plcController)
-        return;
-
-    // 异步投递任务到工作线程
-    QMetaObject::invokeMethod(plcController,
-                              "writeCoilData",
-                              Qt::QueuedConnection,
-                              Q_ARG(double, value),
-                              Q_ARG(double, address));
 }
 
 void MainWindow::shutdownModuleThreads()
 {
-    if(mahrTimer)
-        mahrTimer->stop();
     if(confTimer)
         confTimer->stop();
     if(StatusBarTimer)
@@ -2050,7 +1936,6 @@ void MainWindow::shutdownModuleThreads()
         threadManager->stopAll(3000);
 
     confocalWorker = nullptr;
-    plcController = nullptr;
     // DLP 直接在主线程创建，释放它（析构会断开 I2C/硬件连接）。
     if(dlp1)
     {
@@ -2058,7 +1943,6 @@ void MainWindow::shutdownModuleThreads()
         dlp1 = nullptr;
     }
     pointCloudWorker = nullptr;
-    plcConnectedFlag = false;
     dlpInitialized = false;
     pointCloudLoadInProgress = false;
 
@@ -2415,6 +2299,17 @@ void MainWindow::updateConfocalMeasurementResult(int channelIndex, float result,
                     signalData.constData(),
                     static_cast<size_t>(copyLength) * sizeof(int));
     }
+
+    if(channelIndex == ui->comboBoxSingleChannelSelect->currentIndex()
+        && (!confocalDisplayRefreshTimer.isValid()
+            || confocalDisplayRefreshTimer.elapsed() >= 100))
+    {
+        ui->lcdConfocalMeasurementValue->display(result);
+        if(confocalDisplayRefreshTimer.isValid())
+            confocalDisplayRefreshTimer.restart();
+        else
+            confocalDisplayRefreshTimer.start();
+    }
 }
 
 
@@ -2430,18 +2325,10 @@ void MainWindow::initRuntimeBuffers()
     jiaodu3.resize(xunhuan);
     cgq3.resize(xunhuan);
 
-    // cgqpxht.resize(xunhuan);
-    // jiaodupxht.resize(xunhuan);
 }
 
 void MainWindow::initTimers()
 {
-    mahrTimer = new QTimer(this);
-    mahrTimer->setInterval(100);
-
-    mahrTimer77 = new QTimer(this);
-    mahrTimer77->setInterval(100);
-
     confTimer = new QTimer(this);
     confTimer->setInterval(100);
 
@@ -2666,32 +2553,6 @@ QPushButton:disabled {
     background-color: #d5dbe3;
     color: #f9fafb;
     border: 1px solid #c6ced8;
-}
-
-QPushButton#emergency_stop {
-    background-color: #d96c6c;
-    border: 1px solid #c85e5e;
-}
-
-QPushButton#emergency_stop:hover {
-    background-color: #e28282;
-}
-
-QPushButton#emergency_stop:pressed {
-    background-color: #bf5757;
-}
-
-QPushButton#btnMotor_Enable {
-    background-color: #6ca86c;
-    border: 1px solid #5c975c;
-}
-
-QPushButton#btnMotor_Enable:hover {
-    background-color: #80b680;
-}
-
-QPushButton#btnMotor_Enable:pressed {
-    background-color: #548954;
 }
 
 QWidget#points_show {
@@ -2939,26 +2800,6 @@ QPlainTextEdit#plainTextEdit {
     ui->tabWidget_Points->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     ui->plainTextEdit->setPlaceholderText(tr("系统运行日志会显示在这里"));
 
-    ui->progressBar->setRange(0, 100);
-    ui->progressBar->setFormat("%p%");
-    ui->progressBar->setValue(0);
-
-    ui->pianxinX->display(QString::number(0, 'f', 4));
-    ui->pianxinY->display(QString::number(0, 'f', 4));
-
-    ui->label_56->setStyleSheet("background-color: yellow;");
-
-    ui->progressBar_2->setRange(0, 100);
-    ui->progressBar_2->setFormat("%p%");
-    ui->progressBar_2->setValue(0);
-
-    ui->qingxieX->display(QString::number(0, 'f', 5));
-    ui->qingxieY->display(QString::number(0, 'f', 5));
-
-    ui->lcdNumber->display(QString::number(0, 'f', 4));
-    ui->lcdNumber_2->display(QString::number(0, 'f', 4));
-
-    ui->label_71->setStyleSheet("background-color: yellow;");
 }
 
 void MainWindow::setupPointCloudWorkspaceUi()
@@ -3133,348 +2974,10 @@ void MainWindow::regroupPointCloudActionButtons(QWidget *optionsPage)
     // 只通过 CSS 样式控制按钮外观，不修改父子关系和布局结构
 }
 
-void MainWindow::intial_window_connect()
-{
-    setLED(ui->lblLED, 1, 128);
-    jogPanel = new JogPanel(nullptr);
-    jogPanel->move(200, 200);
-
-    // X
-    connect(jogPanel, &JogPanel::xPositivePressed,
-            this, &MainWindow::X_positive_pressed);
-    connect(jogPanel, &JogPanel::xPositiveReleased,
-            this, &MainWindow::X_positive_released);
-
-    connect(jogPanel, &JogPanel::xNegativePressed,
-            this, &MainWindow::X_negative_pressed);
-    connect(jogPanel, &JogPanel::xNegativeReleased,
-            this, &MainWindow::X_negative_released);
-
-    // Y
-    connect(jogPanel, &JogPanel::yPositivePressed,
-            this, &MainWindow::Y_positive_pressed);
-    connect(jogPanel, &JogPanel::yPositiveReleased,
-            this, &MainWindow::Y_positive_released);
-
-    connect(jogPanel, &JogPanel::yNegativePressed,
-            this, &MainWindow::Y_negative_pressed);
-    connect(jogPanel, &JogPanel::yNegativeReleased,
-            this, &MainWindow::Y_negative_released);
-
-    // Z
-    connect(jogPanel, &JogPanel::zPositivePressed,
-            this, &MainWindow::Z_positive_pressed);
-    connect(jogPanel, &JogPanel::zPositiveReleased,
-            this, &MainWindow::Z_positive_released);
-
-    connect(jogPanel, &JogPanel::zNegativePressed,
-            this, &MainWindow::Z_negative_pressed);
-    connect(jogPanel, &JogPanel::zNegativeReleased,
-            this, &MainWindow::Z_negative_released);
-
-
-    // 绑定信号槽
-    connect(jogPanel, &JogPanel::adjustAPositivePressed,
-            this, &MainWindow::adjustA_positive_pressed);
-    connect(jogPanel, &JogPanel::adjustAPositiveReleased,
-            this, &MainWindow::adjustA_positive_released);
-
-    connect(jogPanel, &JogPanel::adjustANegativePressed,
-            this, &MainWindow::adjustA_negative_pressed);
-    connect(jogPanel, &JogPanel::adjustANegativeReleased,
-            this, &MainWindow::adjustA_negative_released);
-
-    // 绑定信号槽
-    connect(jogPanel, &JogPanel::adjustBPositivePressed,
-            this, &MainWindow::adjustB_positive_pressed);
-    connect(jogPanel, &JogPanel::adjustBPositiveReleased,
-            this, &MainWindow::adjustB_positive_released);
-
-    connect(jogPanel, &JogPanel::adjustBNegativePressed,
-            this, &MainWindow::adjustB_negative_pressed);
-    connect(jogPanel, &JogPanel::adjustBNegativeReleased,
-            this, &MainWindow::adjustB_negative_released);
-
-    // 悬浮 JogPanel 的实体输入控件复用 MainWindow 的 PLC 写入与运动流程。
-    connect(jogPanel, &JogPanel::moveXRequested, this, [this](double target) {
-        sendRegistersAndVar(target, address_x1, address_x2, 500);
-    });
-    connect(jogPanel, &JogPanel::moveY1Requested, this, [this](double target) {
-        sendRegistersAndVar(target, address_y1, address_y2, 500);
-    });
-    connect(jogPanel, &JogPanel::moveY2Requested, this, [this](double target) {
-        sendRegistersAndVar(target, address_y12, address_y22, 500);
-    });
-    connect(jogPanel, &JogPanel::moveZ1Requested, this, [this](double target) {
-        sendRegistersAndVar(target, address_z1, address_z2, 500);
-    });
-    connect(jogPanel, &JogPanel::moveZ2Requested, this, [this](double target) {
-        sendRegistersAndVar(target, address_z12, address_z22, 500);
-    });
-    connect(jogPanel, &JogPanel::moveLargeRotateRequested, this, [this](double target) {
-        postPlcWriteHoldingRegisters(target, 0);
-        QTimer::singleShot(500, this, [this]() { postPlcMoveToAbsolutePosition(1, 7); });
-    });
-    connect(jogPanel, &JogPanel::moveSmallRotateRequested, this, [this](double target) {
-        sendRegistersAndVar(target, 60, 19, 500);
-    });
-    // 相对步进：用 PLC 最新反馈位置叠加步进值，再走既有绝对定位流程。
-    connect(jogPanel, &JogPanel::stepXRequested, this, [this](double step) {
-        sendRegistersAndVar(plcSnapshot.m_new_lizhu1_X + step, address_x1, address_x2, 500);
-    });
-    connect(jogPanel, &JogPanel::stepY1Requested, this, [this](double step) {
-        sendRegistersAndVar(plcSnapshot.m_new_sensor1_Y + step, address_y1, address_y2, 500);
-    });
-    connect(jogPanel, &JogPanel::stepZ1Requested, this, [this](double step) {
-        sendRegistersAndVar(plcSnapshot.m_new_sensor1_Z + step, address_z1, address_z2, 500);
-    });
-    connect(jogPanel, &JogPanel::stepY2Requested, this, [this](double step) {
-        sendRegistersAndVar(plcSnapshot.m_new_sensor2_Y + step, address_y12, address_y22, 500);
-    });
-    connect(jogPanel, &JogPanel::stepZ2Requested, this, [this](double step) {
-        sendRegistersAndVar(plcSnapshot.m_new_sensor2_Z + step, address_z12, address_z22, 500);
-    });
-    connect(jogPanel, &JogPanel::stepLargeRotateRequested, this, [this](double step) {
-        const double boundedStep = std::max(-180.0, std::min(180.0, step));
-        postPlcWriteHoldingRegisters(plcSnapshot.m_new_angle + boundedStep, 0);
-        QTimer::singleShot(500, this, [this]() { postPlcMoveToAbsolutePosition(1, 7); });
-    });
-    connect(jogPanel, &JogPanel::stepSmallRotateRequested, this, [this](double step) {
-        const double boundedStep = std::max(-180.0, std::min(180.0, step));
-        sendRegistersAndVar(plcSnapshot.m_small_angle + boundedStep, 60, 19, 500);
-    });
-
-    // 速度与绝对位置输入已迁移到悬浮面板，主界面仅保留打开面板的入口。
-    const QStringList migratedControlWidgets = {
-        QStringLiteral("label_235"), QStringLiteral("label_236"), QStringLiteral("label_250"),
-        QStringLiteral("label_237"), QStringLiteral("label_252"), QStringLiteral("label_241"), QStringLiteral("label_243"),
-        QStringLiteral("label_238"), QStringLiteral("label_239"), QStringLiteral("label_251"),
-        QStringLiteral("label_240"), QStringLiteral("label_253"), QStringLiteral("label_242"), QStringLiteral("label_244"),
-        QStringLiteral("daoguix_x"), QStringLiteral("daoguix_y"), QStringLiteral("daoguix_y_2"),
-        QStringLiteral("daoguix_z"), QStringLiteral("daoguix_z_2"), QStringLiteral("rotaiton_table"),
-        QStringLiteral("txtsmallRotate_angle_target"), QStringLiteral("Daogui_X"), QStringLiteral("Daogui_Y"),
-        QStringLiteral("Daogui_Y_2"), QStringLiteral("Daogui_Z"), QStringLiteral("Daogui_Z_2"),
-        QStringLiteral("rotation"), QStringLiteral("smallRotate_angle_move")
-    };
-    for(const QString& objectName : migratedControlWidgets)
-    {
-        if(QWidget* widget = findChild<QWidget*>(objectName))
-            widget->hide();
-    }
-
-}
-///======================= PLC =======================///
-void MainWindow::initPlcRuntimeConnection()
-{
-    // 绑定信号槽
-    connect(mahrTimer, &QTimer::timeout,
-            this, &MainWindow::mahrSensor,
-            Qt::UniqueConnection);
-
-    connect(confTimer, &QTimer::timeout,
-            this, &MainWindow::confSensor,
-            Qt::UniqueConnection);
-
-    connect(StatusBarTimer, &QTimer::timeout,
-            this, &MainWindow::StatuesBar_flash,
-            Qt::UniqueConnection);
-
-
-    i_rote = 0;
-}
-
-void MainWindow::initial_velocity()
-{
-    postPlcWriteHoldingRegisters(m_positionVelocity, 28);
-    postPlcWriteHoldingRegisters(m_rotateVelocity, 24);
-}
-
-void MainWindow::initPlcPaths()
-{
-    address_x1 = ui->addressx_reg_1->text().toDouble();
-    address_y1 = ui->addressy_reg_1->text().toDouble();
-    address_z1 = ui->addressz_reg_1->text().toDouble();
-    address_x2 = ui->addressx_cyl_1->text().toDouble();
-    address_y2 = ui->addressy_cyl_1->text().toDouble();
-    address_z2 = ui->addressz_cyl_1->text().toDouble();
-    address_y12 = ui->addressy_reg_2->text().toDouble();
-    address_y22 = ui->addressy_cyl_2->text().toDouble();
-    address_z12 = ui->addressz_reg_2->text().toDouble();
-    address_z22 = ui->addressz_cyl_2->text().toDouble();
-
-    addressqing_reg_1 = ui->addressqing_reg_1->text().toDouble();
-    addressqing_reg_2 = ui->addressqing_reg_2->text().toDouble();
-    addressqing_reg_3 = ui->addressqing_reg_3->text().toDouble();
-    addressqing_reg_4 = ui->addressqing_reg_4->text().toDouble();
-    addressqing_cyl_1 = ui->addressqing_cyl_1->text().toDouble();
-    addressqing_cyl_2 = ui->addressqing_cyl_2->text().toDouble();
-    addressqing_cyl_3 = ui->addressqing_cyl_3->text().toDouble();
-    addressqing_cyl_4 = ui->addressqing_cyl_4->text().toDouble();
-
-    addressxin_reg_1 = ui->addressxin_reg_1->text().toDouble();
-    addressxin_reg_2 = ui->addressxin_reg_2->text().toDouble();
-    addressxin_cyl_1 = ui->addressxin_cyl_1->text().toDouble();
-    addressxin_cyl_2 = ui->addressxin_cyl_2->text().toDouble();
-
-
-}
-///======================= PLC =======================///
-void MainWindow::mahrSensor()
-{
-    postPlcStartCollectingData();
-
-
-    QDateTime dateTime = QDateTime::currentDateTime();
-    ui->lblDataTime->setText(dateTime.toString("yyyy-MM-dd hh:mm:ss")); // 格式化时间
-
-    // PLC
-
-    // 2024.8.28
-    ui->guangpu_X->display(QString::number(plcSnapshot.m_new_lizhu1_X, 'f', 4));
-
-    ui->guangpu_Y->display(QString::number(plcSnapshot.m_new_sensor1_Y, 'f', 4));
-
-    ui->guangpu_Y_2->display(QString::number(plcSnapshot.m_new_sensor2_Y, 'f', 4));
-
-    ui->guangpu_Z->display(QString::number(plcSnapshot.m_new_sensor1_Z, 'f', 4));
-
-    ui->guangpu_Z_2->display(QString::number(plcSnapshot.m_new_sensor2_Z, 'f', 4));
-
-    ui->rotation_angel->display(QString::number(plcSnapshot.m_new_angle, 'f', 2));
-
-    ui->LCD_1_position->display(QString::number(plcSnapshot.m_tiaoqing1, 'f', 4));
-
-    ui->LCD_2_position->display(QString::number(plcSnapshot.m_tiaoqing2, 'f', 4));
-
-    ui->LCD_3_position->display(QString::number(plcSnapshot.m_tiaoqing3, 'f', 4));
-
-    ui->LCD_4_position->display(QString::number(plcSnapshot.m_tiaoqing4, 'f', 4));
-
-    ui->LCD_5_position->display(QString::number(plcSnapshot.m_tiaoxin1, 'f', 4));
-
-    ui->LCD_6_position->display(QString::number(plcSnapshot.m_tiaoxin2, 'f', 4));
-
-    ui->LCDsmallRotate_angle->display(QString::number(plcSnapshot.m_small_angle, 'f', 4));
-
-}
-
-void MainWindow::confSensor()
-{
-    ui->lcdNumberSingleChannelResult->display(g_Global->g_measureResult[g_Global->singleChannelIndex]);
-
-}
-
-void MainWindow::on_actionPlcCConect_triggered()
-{
-    PlcConnect *dlg = new PlcConnect(this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->setWindowModality(Qt::ApplicationModal);
-
-    dlg->setPlcConnected(plcConnectedFlag);
-
-    connect(dlg, &PlcConnect::connectRequested,
-            this, [this, dlg]() {
-                if (!plcController) {
-                    ui->plainTextEdit->appendPlainText(
-                        systemTime() + " PLC doesn't exist"
-                        );
-                    return;
-                }
-
-                dlg->setPlcConnecting();
-
-                ui->plainTextEdit->appendPlainText(
-                    systemTime() + " 姝ｅ湪杩炴帴PLC..."
-                    );
-
-                postPlcConnect();
-            });
-
-    connect(dlg, &PlcConnect::disconnectRequested,
-            this, [this]() {
-                if (!plcController) {
-                    ui->plainTextEdit->appendPlainText(
-                        systemTime() + " PLC doesn't exist"
-                        );
-                    return;
-                }
-
-                ui->plainTextEdit->appendPlainText(
-                    systemTime() + " 姝ｅ湪鏂紑PLC..."
-                    );
-
-                // 绑定信号槽
-                            postPlcDisconnect();
-            });
-
-    if (plcController) {
-        // 绑定信号槽
-            connect(plcController, &Plc::plcConnecting,
-                dlg, [dlg]() {
-                    dlg->setPlcConnecting();
-                }, Qt::QueuedConnection);
-
-        connect(plcController, &Plc::plcConnected,
-                dlg, [dlg]() {
-                    dlg->setPlcConnected(true);
-                }, Qt::QueuedConnection);
-
-        connect(plcController, &Plc::plcDisconnected,
-                dlg, [dlg]() {
-                    dlg->setPlcConnected(false);
-                }, Qt::QueuedConnection);
-
-        connect(plcController, &Plc::plcError,
-                dlg, [dlg](const QString &err) {
-                    Q_UNUSED(err)
-                    dlg->setPlcConnected(false);
-                }, Qt::QueuedConnection);
-    }
-
-    dlg->show();
-    dlg->raise();
-    dlg->activateWindow();
-}
-
-// 构造对话框并把 CF 的 5 个设置分页从主界面 tabWidget_tri 移入对话框。
-// 在启动时（构造函数中）调用，使主界面 tabWidget_tri 一开始就只保留其余分页。
-// 采用 reparent 方案：这 5 页仍定义在 mainwindow.ui，QTabWidget::addTab 只改变父子
-// 关系，控件对象仍是 MainWindow 的成员，ui->xxx 引用与 on_xxx_ 自动槽全部不受影响。
-void MainWindow::initConfocalSettingsDialog()
-{
-    if (confocalSettingsDialog)
-        return;
-
-    confocalSettingsDialog = new ConfocalSettingsDialog(this);
-    // 非模态：不抢占焦点，可与主窗口同时操作，便于"应用"边调试边看主界面。
-    confocalSettingsDialog->setWindowModality(Qt::NonModal);
-
-    // 确认/应用时写入设置（当前为占位，后续接入实际写入逻辑）。
-    connect(confocalSettingsDialog, &ConfocalSettingsDialog::settingsApplyRequested,
-            this, [this]() {
-                // TODO: 在此写入光谱共焦传感器设置（下发 confocalWorker 或存配置）。
-            });
-
-    QTabWidget *dst = confocalSettingsDialog->contentTabWidget();
-    struct { QWidget *page; const char *title; } cfPages[] = {
-        { ui->tabSingleChannelMode,   u8"单通道" },
-        { ui->tabCommunicationMode,   u8"通讯" },
-        { ui->tabLightSourceMode,     u8"光源" },
-        { ui->tabImportMode,          u8"输入" },
-        { ui->tabSignalAndFilterMode, u8"信号饱和度" },
-    };
-    for (const auto &p : cfPages) {
-        dst->addTab(p.page, QString::fromUtf8(p.title));
-    }
-}
-
-// 光谱共焦传感器设置：点击菜单 actionCF_Sensor 弹出已建好的设置对话框。
+// 保持与 v3.2.5 一致：光谱共焦页面始终作为主窗口的 tabWidget_tri 分页。
 void MainWindow::on_actionCF_Sensor_triggered()
 {
-    initConfocalSettingsDialog();  // 兜底：若启动时未初始化则此处补建。
-    confocalSettingsDialog->show();
-    confocalSettingsDialog->raise();
-    confocalSettingsDialog->activateWindow();
+    ui->tabWidget_tri->setCurrentWidget(ui->tabSingleChannelMode);
 }
 
 
@@ -3486,646 +2989,6 @@ void MainWindow::StatuesBar_flash()
     getStatusBarResult();
     setStatusBarValue();
 }
-
-void MainWindow::on_btnMotor_Enable_clicked(bool checked)
-{
-    // double address;
-
-    if (checked)
-    {
-        ui->btnMotor_Enable->setText("鐢垫満涓婄數");
-        ui->btnMotor_Enable->setCheckable(false);
-
-        enable_flag = !enable_flag;
-        setLED(ui->lblLED, 1, 128);
-
-    }
-    else
-    {
-        ui->btnMotor_Enable->setCheckable(true);
-        ui->btnMotor_Enable->setText("鐢垫満鏂數");
-
-        enable_flag = !enable_flag;
-        setLED(ui->lblLED, 2, 128);
-    }
-
-    std::cout << enable_flag << std::endl;
-    postPlcStartContinuousMovement(enable_flag, 6);
-}
-
-
-// color 0:grey 1:red 2:green 3:yellow
-void MainWindow::setLED(QLabel* label, int color, int size)
-{
-    label->setText("");
-    QString min_width = QString("min-width: %1px;").arg(size);              // 最小宽度：size
-    QString min_height = QString("min-height: %1px;").arg(size);            // 最小高度：size
-    QString max_width = QString("max-width: %1px;").arg(size);              // 最小宽度：size
-    QString max_height = QString("max-height: %1px;").arg(size);            // 最小高度：size
-    QString border_radius = QString("border-radius: %1px;").arg(size/2);    // 圆角边框，半径为size/2
-    QString border = QString("border:1px solid black;");                    // 1px黑色边框
-    QString background = "background-color:";
-    switch (color) {
-    case 0:
-        background += "rgb(190,190,190)";
-        break;
-    case 1:
-        background += "rgb(255,0,0)";
-        break;
-    case 2:
-        background += "rgb(0,255,0)";
-        break;
-    case 3:
-        background += "rgb(255,255,0)";
-        break;
-    default:
-        break;
-    }
-
-    const QString SheetStyle = min_width + min_height + max_width + max_height + border_radius + border + background;
-    label->setStyleSheet(SheetStyle);
-}
-void MainWindow::on_btnPosition_Velocity_clicked()
-{
-    QString Velocity = ui->txtPosition_Velocity->text();
-    double registers = Velocity.toDouble();
-    m_positionVelocity = registers;
-    postPlcWriteHoldingRegisters(registers, 28);
-}
-
-
-void MainWindow::on_rotation_clicked()
-{
-    ui->rotation->setEnabled(false);
-
-    QString target = ui->rotaiton_table->text();
-    double registers = target.toDouble();
-
-    postPlcWriteHoldingRegisters(registers, 0); // 向转台角度寄存器写入 LREAL
-
-    QTimer::singleShot(500, this, [=]() {
-        postPlcMoveToAbsolutePosition(1, 7); // 线圈触发启动
-        ui->rotation->setEnabled(true);
-    });
-}
-
-
-void MainWindow::on_btnRotate_Velocity_clicked()
-{
-    QString Velocity = ui->txtRotate_Velocity->text();
-    double registers = Velocity.toDouble();
-    m_rotateVelocity = registers;
-    postPlcWriteHoldingRegisters(registers, 24);
-}
-
-
-void MainWindow::on_btnRotate_clicked()
-{
-
-
-    double var = 1;
-    postPlcStartContinuousMovement(var, 0);
-
-}
-
-
-void MainWindow::on_btnRotateStop_clicked()
-{
-    double var = 0;
-    // double address = 6;
-    postPlcStartContinuousMovement(var, 0);
-}
-
-
-void MainWindow::on_Daogui_X_clicked()
-{
-    QString target = ui->daoguix_x->text();
-    double Target = target.toDouble();
-    sendRegistersAndVar(Target, address_x1, address_x2, 500);
-}
-
-
-void MainWindow::on_Daogui_Y_clicked()
-{
-    QString target = ui->daoguix_y->text();
-    double Target = target.toDouble();
-    sendRegistersAndVar(Target, address_y1, address_y2, 500);
-}
-
-
-void MainWindow::on_Daogui_Y_2_clicked()
-{
-    QString target = ui->daoguix_y_2->text();
-    double Target = target.toDouble();
-    sendRegistersAndVar(Target, address_y12, address_y22, 500);
-}
-
-
-void MainWindow::on_Daogui_Z_clicked()
-{
-    QString target = ui->daoguix_z->text();
-    double Target = target.toDouble();
-    sendRegistersAndVar(Target, address_z1, address_z2, 500);
-}
-
-
-void MainWindow::on_Daogui_Z_2_clicked()
-{
-    QString target = ui->daoguix_z_2->text();
-    double Target = target.toDouble();
-    sendRegistersAndVar(Target, address_z12, address_z22, 500);
-}
-
-
-void MainWindow::sendRegistersAndVar(const double Target, double address, double address2, double sleep_time)
-{
-    postPlcWriteHoldingRegisters(Target, address);
-
-    QTimer::singleShot(sleep_time, this, [=]() {
-        postPlcMoveToAbsolutePosition(1, address2); // 线圈触发启动
-    });
-}
-
-
-void MainWindow::on_confirm_clicked()
-{
-    address_x1 = ui->addressx_reg_1->text().toDouble();
-    address_y1 = ui->addressy_reg_1->text().toDouble();
-    address_z1 = ui->addressz_reg_1->text().toDouble();
-
-    address_x2 = ui->addressx_cyl_1->text().toDouble();
-    address_y2 = ui->addressy_cyl_1->text().toDouble();
-    address_z2 = ui->addressz_cyl_1->text().toDouble();
-
-    address_y12 = ui->addressy_reg_2->text().toDouble();
-    address_y22 = ui->addressy_cyl_2->text().toDouble();
-    address_z12 = ui->addressz_reg_2->text().toDouble();
-    address_z22 = ui->addressz_cyl_2->text().toDouble();
-
-    addressqing_reg_1 = ui->addressqing_reg_1->text().toDouble();
-    addressqing_reg_2 = ui->addressqing_reg_2->text().toDouble();
-    addressqing_reg_3 = ui->addressqing_reg_3->text().toDouble();
-    addressqing_reg_4 = ui->addressqing_reg_4->text().toDouble();
-
-    addressqing_cyl_1 = ui->addressqing_cyl_1->text().toDouble();
-    addressqing_cyl_2 = ui->addressqing_cyl_2->text().toDouble();
-    addressqing_cyl_3 = ui->addressqing_cyl_3->text().toDouble();
-    addressqing_cyl_4 = ui->addressqing_cyl_4->text().toDouble();
-
-    addressxin_reg_1 = ui->addressxin_reg_1->text().toDouble();
-    addressxin_reg_2 = ui->addressxin_reg_2->text().toDouble();
-
-    addressxin_cyl_1 = ui->addressxin_cyl_1->text().toDouble();
-    addressxin_cyl_2 = ui->addressxin_cyl_2->text().toDouble();
-}
-
-
-
-void MainWindow::initPaths()
-{
-    // basePath = ui->cali_data_root->text().trimmed();
-    // ball_A_path = basePath + "/A.txt";
-    // ball_B_path = basePath + "/B.txt";
-    // rotation_angel = basePath + "/rotation_angel.txt";
-
-    ui->calculate->setEnabled(false);
-    ui->load_calibration_data->setEnabled(false);
-    ui->write_ball_A_points->setEnabled(false);
-    ui->write_ball_B_points->setEnabled(false);
-    ui->write_ball_A_done->setEnabled(false);
-    ui->write_ball_B_done->setEnabled(false);
-    ui->record_done->setEnabled(false);
-    ui->recover->setEnabled(false);
-
-    enable_flag = 0; // 上电初始化
-}
-void MainWindow::on_calculate_clicked()
-{
-    QString strR1 = ui->ball_A_R->text().trimmed();
-    QString strR2 = ui->ball_B_R->text().trimmed();
-    QString strD  = ui->distance->text().trimmed();
-    ParameterPath = basePath + "/rotation_result.bin";
-
-    if (strR1.isEmpty()) {
-        QMessageBox::warning(this, "鎻愮ず", "Please give R1");
-        return;
-    }
-
-    if (strR2.isEmpty()) {
-        QMessageBox::warning(this, "鎻愮ず", "Please give R2");
-        return;
-    }
-
-    if (strD.isEmpty()) {
-        QMessageBox::warning(this, "鎻愮ず", "Please give distance");
-        return;
-    }
-
-    if (basePath.isEmpty()) {
-        QMessageBox::warning(this, "鎻愮ず", "Please give root path");
-        return;
-    }
-
-    G_R1 = strR1.toDouble();
-    G_R2 = strR2.toDouble();
-    G_BALL_DISTANCE = strD.toDouble();
-    groupCount = ui->comboBox_ball_number->currentText().toInt();
-
-    QVector<QVector<MatrixXd>> Points_tri, Points_sensor, Points_test_all;
-
-    try {
-        fileReaderWriter->loadTxtABtoTriAndSensor(
-            ball_A_path,
-            ball_B_path,
-            Points_tri,
-            Points_sensor,
-            groupCount
-            );
-
-        fileReaderWriter->combineTriAndSensor(
-            Points_tri,
-            Points_sensor,
-            Points_test_all
-            );
-
-    } catch (const std::exception& e) {
-        QMessageBox::critical(
-            this,
-            "閿欒",
-            "数据加载失败: " + QString::fromStdString(e.what())
-            );
-        return;
-    }
-
-    Matrix3d M_g;
-    QVector<QVector<Vector3d>> initial_center;
-    calibration->gainInitialParameter(Points_test_all, M_g, initial_center);
-    qDebug() << "Initial Rotation Matrix M_g:";
-    for (int i = 0; i < 3; ++i) {
-        qDebug() << M_g(i, 0) << M_g(i, 1) << M_g(i, 2);
-    }
-    double radius_1 = 0, radius_2 = 0;
-    calibration->nonLinearOptimalMulti(
-        M_g, Points_tri,
-        G_R1, G_R2, G_BALL_DISTANCE, Points_sensor,
-        center_all_tri, theta, M_opt, radius_1, radius_2);
-
-    ui->plainTextEdit->appendPlainText(systemTime());
-    ui->plainTextEdit->appendPlainText(" M_opt and (alpha, beta) have been saved successfully to: " + ParameterPath);
-
-    ui->plainTextEdit->appendPlainText(tr("=== Calibration Matrix M_opt ==="));
-    for (int i = 0; i < 3; ++i) {
-        QString row;
-        for (int j = 0; j < 3; ++j) {
-            row += QString::number(M_opt(i, j), 'f', 6) + " ";
-        }
-        ui->plainTextEdit->appendPlainText(row.trimmed());
-    }
-
-    fileReaderWriter->saveParameters(M_opt, theta, ParameterPath);
-}
-
-void MainWindow::on_load_calibration_data_clicked()
-{
-    basePath = ui->cali_data_root->text().trimmed();
-    ParameterPath = basePath + "\\rotation_result.bin";
-    // 参数校验，无效时提前返回。
-    if (!QFile::exists(ParameterPath)) {
-        QMessageBox::warning(this, tr("File Not Found"), tr("rotation_result.bin not found. Path: ") + ParameterPath);
-        return;
-    }
-    fileReaderWriter->loadRotationParameters(ParameterPath, M_opt, alpha, beta);
-    ui->plainTextEdit->appendPlainText(systemTime());
-    ui->plainTextEdit->appendPlainText(" M_opt and (alpha, beta) have been loaded successfully");
-
-}
-
-void MainWindow::on_btnChooseFile_clicked()
-{
-    qDebug() << ui->cali_data_root->text().trimmed();
-
-    basePath = QFileDialog::getExistingDirectory(
-        this,
-        tr("Select Folder"),
-        ui->cali_data_root->text().trimmed(),
-        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
-        );
-
-    if (!basePath.isEmpty()) {
-
-        ui->calculate->setEnabled(true);
-        ui->load_calibration_data->setEnabled(true);
-        ui->record_done->setEnabled(true);
-        ui->write_ball_A_points->setEnabled(true);
-        ui->write_ball_B_points->setEnabled(true);
-        ui->write_ball_A_done->setEnabled(true);
-        ui->write_ball_B_done->setEnabled(true);
-        ui->recover->setEnabled(true);
-
-        ui->cali_data_root->setText(basePath); // 鏄剧ず鍒扮晫闈?
-
-        ball_A_path = basePath + "\\A.txt";
-        ball_B_path = basePath + "\\B.txt";
-        rotation_angel = basePath + "\\rotation_angel.txt";
-
-        QStringList createdFiles;
-
-        // 参数校验，无效时提前返回。
-        if (!QFile::exists(ball_A_path)) {
-            QFile fileA(ball_A_path);
-            if (fileA.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                fileA.close();
-                createdFiles << "A.txt";
-            }
-        }
-
-        // 参数校验，无效时提前返回。
-        if (!QFile::exists(ball_B_path)) {
-            QFile fileB(ball_B_path);
-            if (fileB.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                fileB.close();
-                createdFiles << "B.txt";
-            }
-        }
-
-        // 参数校验，无效时提前返回。
-        if (!QFile::exists(rotation_angel)) {
-            QFile filerotation_angel(rotation_angel);
-            if (filerotation_angel.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                filerotation_angel.close();
-                createdFiles << "rotation_angel.txt";
-            }
-        }
-
-        // 参数校验，无效时提前返回。
-        if (!createdFiles.isEmpty()) {
-            ui->plainTextEdit->appendPlainText(
-                systemTime() + " 宸插垱寤烘爣瀹氭枃浠讹細" + createdFiles.join(", ")
-                );
-        } else {
-            ui->plainTextEdit->appendPlainText(
-                systemTime() + " 鎵€鏈夋爣瀹氭枃浠跺凡瀛樺湪"
-                );
-        }
-    } else {
-        QMessageBox::information(this, tr("Notice"), tr("No folder selected."));
-    }
-}
-
-
-void MainWindow::on_write_ball_A_points_clicked()
-{
-    double x = plcSnapshot.m_new_lizhu1_X;
-    double y = plcSnapshot.m_new_sensor1_Y;
-    double z = plcSnapshot.m_new_sensor1_Z;
-    double sensor = g_Global->g_measureResult[g_Global->singleChannelIndex];
-    // 参数校验，无效时提前返回。
-    if (sensor == 888888) {
-        QMessageBox::warning(this, tr("Invalid Data"), tr("The current confocal data is invalid. Please remeasure."));
-        return;
-    }
-
-    QFile file(ball_A_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("Write Failed"), tr("Failed to open file: ") + ball_A_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << QString::number(x, 'f', 6) << " "
-        << QString::number(y, 'f', 6) << " "
-        << QString::number(z, 'f', 6) << " "
-        << QString::number(sensor, 'f', 6) << "\n";
-    file.close();
-    // QTextStream out(&file);
-    // out << QString::number(sensor, 'f', 6) << "\n";
-    // file.close();
-
-    ui->plainTextEdit->appendPlainText(QString::number(x, 'f', 3)+" "+QString::number(y, 'f', 3)+" "+QString::number(z, 'f', 3)+" "+QString::number(sensor, 'f', 3));
-    // ui->plainTextEdit->appendPlainText(QString::number(sensor, 'f', 3));
-
-}
-
-
-void MainWindow::on_write_ball_A_done_clicked()
-{
-    QFile file(ball_A_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("閿欒"), tr("无法打开文件: ") + ball_A_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << "\n";  // 添加空行
-    file.close();
-
-    ui->plainTextEdit->appendPlainText(
-        systemTime() + " " + tr("宸叉坊鍔犲垎缁勯棿闅旇嚦 A.txt")
-        );
-}
-
-void MainWindow::on_write_ball_B_points_clicked()
-{
-    double x = plcSnapshot.m_new_lizhu1_X;
-    double y = plcSnapshot.m_new_sensor1_Y;
-    double z = plcSnapshot.m_new_sensor1_Z;
-    double sensor = g_Global->g_measureResult[g_Global->singleChannelIndex];
-
-    // 参数校验，无效时提前返回。
-    if (sensor == 888888) {
-        QMessageBox::warning(this, tr("Invalid Data"), tr("The current confocal data is invalid. Please measure again."));
-        return;
-    }
-
-    QFile file(ball_B_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("Write Failed"), tr("Failed to open file: ") + ball_B_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << QString::number(x, 'f', 6) << " "
-        << QString::number(y, 'f', 6) << " "
-        << QString::number(z, 'f', 6) << " "
-        << QString::number(sensor, 'f', 6) << "\n";
-    file.close();
-
-    ui->plainTextEdit->appendPlainText(
-        QString::number(x, 'f', 3) + " " +
-        QString::number(y, 'f', 3) + " " +
-        QString::number(z, 'f', 3)
-        );
-}
-
-
-void MainWindow::on_write_ball_B_done_clicked()
-{
-    QFile file(ball_B_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("閿欒"), tr("无法打开文件: ") + ball_B_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << "\n";  // 添加空行
-    file.close();
-
-    ui->plainTextEdit->appendPlainText(
-        systemTime() + " " + tr("宸叉坊鍔犲垎缁勯棿闅旇嚦 B.txt")
-        );
-}
-
-
-void MainWindow::on_record_done_clicked()
-{
-    QString z_target = ui->Z_target->text().trimmed();
-    target = z_target.toDouble();
-
-    rotation_theta = plcSnapshot.m_new_angle;
-
-    QFile file(rotation_angel);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
-        QTextStream out(&file);
-        out << QString::number(rotation_theta, 'f', 6) << "\n";  // 写入角度并换行
-        file.close();
-
-        ui->plainTextEdit->appendPlainText(systemTime());
-        ui->plainTextEdit->appendPlainText(
-            QString("Angle %1 written to %2")
-                .arg(rotation_theta, 0, 'f', 6)
-                .arg(rotation_angel)
-            );
-
-    } else {
-        QMessageBox::warning(this, tr("wrong file"), tr("can not write into rotation_angel: ") + rotation_angel);
-    }
-
-    delta_rotation_theta = ui->comboBox_ball_number->currentText().toDouble();
-    rotation_theta = rotation_theta + 360 / delta_rotation_theta;
-    i_rote = i_rote + 1;
-
-    qDebug() << rotation_theta;
-
-    sendRegistersAndVar(target, address_z1, address_z2, 500);
-
-    ui->plainTextEdit->appendPlainText(systemTime());
-    ui->plainTextEdit->appendPlainText("Arm moving");
-
-    QTimer *checkTimer = new QTimer(this);
-    connect(checkTimer, &QTimer::timeout, this, [=]() {
-        if (isArmInPosition()) {
-            checkTimer->stop();
-            checkTimer->deleteLater();
-
-            ui->plainTextEdit->appendPlainText(systemTime());
-            ui->plainTextEdit->appendPlainText("Rote Table moving");
-
-            postPlcWriteHoldingRegisters(rotation_theta, 0); // 向转台角度寄存器写入目标角度
-
-            QTimer::singleShot(500, this, [=]() {
-                postPlcMoveToAbsolutePosition(1, 7); // 线圈触发启动
-            });
-
-            // 参数校验，无效时提前返回。
-            if (i_rote == ui->comboBox_ball_number->currentText().toInt()) {
-                ui->record_done->setEnabled(false);
-                ui->write_ball_A_points->setEnabled(false);
-                ui->write_ball_B_points->setEnabled(false);
-                ui->write_ball_A_done->setEnabled(false);
-                ui->write_ball_B_done->setEnabled(false);
-
-                QMessageBox::warning(this, tr("Notice"), tr("calibration has been done"));
-                return;
-            }
-        }
-    });
-
-    checkTimer->start(200);  // 姣?200 ms 妫€鏌ヤ竴娆?
-}
-
-
-bool MainWindow::isArmInPosition()
-{
-    qDebug() << qAbs(plcSnapshot.m_new_sensor1_Z - target);
-    return qAbs(plcSnapshot.m_new_sensor1_Z - target) < tolerance_z_target;
-}
-
-
-void MainWindow::on_recover_clicked()
-{
-    QString z_target = ui->Z_target->text().trimmed();
-    target = z_target.toDouble();
-
-    ui->calculate->setEnabled(false);
-    ui->load_calibration_data->setEnabled(false);
-    ui->write_ball_A_points->setEnabled(false);
-    ui->write_ball_B_points->setEnabled(false);
-    ui->write_ball_A_done->setEnabled(false);
-    ui->write_ball_B_done->setEnabled(false);
-    ui->record_done->setEnabled(false);
-    ui->recover->setEnabled(false);
-
-    i_rote = 0;
-
-    sendRegistersAndVar(target, address_z1, address_z2, 500);
-
-    // QThread::msleep(5000);
-
-    QTimer *checkTimer = new QTimer(this);
-    connect(checkTimer, &QTimer::timeout, this, [=]() {
-        if (isArmInPosition()) {
-            checkTimer->stop();
-            checkTimer->deleteLater();
-
-            postPlcWriteHoldingRegisters(0, 0); // 向转台角度寄存器写入 0 度
-
-            double var = 1;
-            QTimer::singleShot(500, this, [=]() {
-                postPlcMoveToAbsolutePosition(1, 7); // 线圈触发启动
-            });
-
-            QMessageBox::StandardButton reply;
-            reply = QMessageBox::question(this, "Confirm",
-                                          "Do you want to clear A.txt, B.txt and rotation_angel.txt?",
-                                          QMessageBox::Yes | QMessageBox::No);
-            if (reply != QMessageBox::Yes)
-            {
-                return; // 用户选择不清空
-            }
-
-            QFile fileA(ball_A_path);
-            if (fileA.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                fileA.close();
-                ui->plainTextEdit->appendPlainText(systemTime());
-                ui->plainTextEdit->appendPlainText("A.txt cleared successfully.");
-            } else {
-                QMessageBox::critical(this, "File Error", "Failed to clear A.txt.");
-            }
-
-            QFile fileB(ball_B_path);
-            if (fileB.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                fileB.close();
-                ui->plainTextEdit->appendPlainText(systemTime());
-                ui->plainTextEdit->appendPlainText("B.txt cleared successfully.");
-            } else {
-                QMessageBox::critical(this, "File Error", "Failed to clear B.txt.");
-            }
-
-            QFile fileRotation(rotation_angel);
-            if (fileRotation.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                fileRotation.close();
-                ui->plainTextEdit->appendPlainText(systemTime());
-                ui->plainTextEdit->appendPlainText("rotation_angel.txt cleared successfully.");
-            } else {
-                QMessageBox::critical(this, "File Error", "Failed to clear rotation_angel.txt.");
-            }
-        }
-    });
-
-    checkTimer->start(200);  // 姣?200 ms 妫€鏌ヤ竴娆?
-}
-
-
 
 void MainWindow::on_actionLink_clicked()
 {
@@ -4212,17 +3075,17 @@ void MainWindow::on_ChineseEnglishSwitch_clicked()
         {
             setStatusBarValue();
 
-            ui->actionLink->setText("鏂紑");
+            ui->actionLink->setText(tr("断开"));
             if(g_Global->g_isStart)
-                ui->actionStart->setText("鍋滄");
+                ui->actionStart->setText(tr("停止"));
             else
-                ui->actionStart->setText("鍚姩");
+                ui->actionStart->setText(tr("启动"));
         }
         else
         {
             statusBarInit();
 
-            ui->actionLink->setText("杩炴帴");
+            ui->actionLink->setText(tr("连接"));
         }
     }
 }
@@ -4248,21 +3111,21 @@ void MainWindow::setStatusBarValue()
     QString triggerModeStr = "xxxxx";
     switch(triggerMode)
     {
-    case 0:triggerModeStr = tr(" 鍐呴儴杩炵画瑙﹀彂 ");break;
-    case 1:triggerModeStr = tr(" 淇濈暀 ");break;
-    case 2:triggerModeStr = tr(" 缂栫爜鍣ㄨЕ鍙?");break;
-    case 3:triggerModeStr = tr(" 鍐呴儴瀹氭椂瑙﹀彂 ");break;
-    case 4:triggerModeStr = tr(" 鍐呴儴鍗曟瑙﹀彂 ");break;
+    case 0:triggerModeStr = tr("内部连续触发");break;
+    case 1:triggerModeStr = tr("保留");break;
+    case 2:triggerModeStr = tr("编码器触发");break;
+    case 3:triggerModeStr = tr("内部定时触发");break;
+    case 4:triggerModeStr = tr("内部单次触发");break;
     default:triggerModeStr = "";
     }
 
     QString statusText = " ";
-    statusText += tr(" 璁惧鐘舵€?") + triggerModeStr + "  |  ";
-    statusText += tr(" SDK鐗堟湰:") + sdkVersionStr + "  |  ";
-    statusText += tr(" 鎺у埗鍣ㄧ増鏈?") + controlerVersionStr + "  |  ";
-    statusText += tr(" 鎺у埗鍣ㄥ簭鍒楀彿:") + controlerSNStr + "  |  ";
-    statusText += tr(" 浼犳劅澶村簭鍒楀彿:") + sensorSNStr + "  |  ";
-    statusText += tr(" 褰撳墠甯х巼:") + QString::number(curFrameRate) + " " + "Hz";
+    statusText += tr(" 设备状态:") + triggerModeStr + "  |  ";
+    statusText += tr(" SDK版本:") + sdkVersionStr + "  |  ";
+    statusText += tr(" 控制器版本:") + controlerVersionStr + "  |  ";
+    statusText += tr(" 控制器序列号:") + controlerSNStr + "  |  ";
+    statusText += tr(" 传感头序列号:") + sensorSNStr + "  |  ";
+    statusText += tr(" 当前帧率:") + QString::number(curFrameRate) + " " + "Hz";
 
     lableStatus->setText(statusText);
     ui->statusbar->addWidget(lableStatus);
@@ -4331,6 +3194,12 @@ void MainWindow::on_comboBoxSingleChannelSelect_currentIndexChanged(int index)
     {
         g_Global->singleChannelIndex = ui->comboBoxSingleChannelSelect->currentIndex();
     }
+
+    if(index >= 0 && index < 4)
+    {
+        ui->lcdConfocalMeasurementValue->display(g_Global->g_measureResult[index]);
+        confocalDisplayRefreshTimer.invalidate();
+    }
 }
 
 
@@ -4381,7 +3250,7 @@ void MainWindow::on_pushButtonSingleChannelMOdeDark_clicked()
 
     if(confocalWorker)
     {
-        ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("姝ｅ湪鍚敤 dark 鍔熻兘"));
+        ui->plainTextEdit->appendPlainText(systemTime() + " " + tr("正在启用暗信号功能"));
         // 异步投递任务到工作线程
         QMetaObject::invokeMethod(confocalWorker,
                                   "darkSignal",
@@ -4457,12 +3326,12 @@ void MainWindow::importModeInit()
 void MainWindow::statusBarInit()
 {
     QString statusText = " ";
-    statusText += tr(" 璁惧鐘舵€? xxxxx") + "  |  ";
-    statusText += tr(" SDK 鐗堟湰: xxxxx") + "  |  ";
-    statusText += tr(" 鎺у埗鍣ㄧ増鏈? xxxxx") + "  |  ";
-    statusText += tr(" 鎺у埗鍣ㄥ簭鍒楀彿: xxxxx") + "  |  ";
-    statusText += tr(" 浼犳劅澶村簭鍒楀彿: xxxxx") + "  |  ";
-    statusText += tr(" 褰撳墠甯х巼: xxxxx Hz");
+    statusText += tr(" 设备状态: xxxxx") + "  |  ";
+    statusText += tr(" SDK版本: xxxxx") + "  |  ";
+    statusText += tr(" 控制器版本: xxxxx") + "  |  ";
+    statusText += tr(" 控制器序列号: xxxxx") + "  |  ";
+    statusText += tr(" 传感头序列号: xxxxx") + "  |  ";
+    statusText += tr(" 当前帧率: xxxxx Hz");
 
     lableStatus->setText(statusText);
     ui->statusbar->addWidget(lableStatus);
@@ -4520,7 +3389,6 @@ void MainWindow::on_pushButton_clicked()
 // {
 //     if(event->timerId() == timerData)
 //     {
-//         ui->lcdNumberSingleChannelResult->display(g_Global->g_measureResult[g_Global->singleChannelIndex]);
 //     }
 // }
 
@@ -10267,1415 +9135,6 @@ void MainWindow::on_ToPcd_clicked()
         ui->plainTextEdit->appendPlainText(
             systemTime() + " " + tr("STL to PCD complete: %1 points").arg(sampled->size()));
 }
-
-
-
-
-
-void MainWindow::on_RecordY_clicked()
-{
-    double y = plcSnapshot.m_new_sensor1_Y;
-    double sensor = g_Global->g_measureResult[g_Global->singleChannelIndex];
-
-    // 参数校验，无效时提前返回。
-    if (sensor == 888888) {
-        QMessageBox::warning(this, tr("Invalid Data"), tr("The current confocal data is invalid. Please remeasure."));
-        return;
-    }
-
-    QFile file(ball_A_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("Write Failed"), tr("Failed to open file: ") + ball_A_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << QString::number(y, 'f', 6) << "\n";
-    file.close();
-}
-
-
-void MainWindow::on_RecordSensor_clicked()
-{
-    double sensor = g_Global->g_measureResult[g_Global->singleChannelIndex];
-
-    // 参数校验，无效时提前返回。
-    if (sensor == 888888) {
-        QMessageBox::warning(this, tr("Invalid Data"), tr("The current confocal data is invalid. Please remeasure."));
-        return;
-    }
-
-    QFile file(ball_B_path);
-    if (!file.open(QIODevice::Append | QIODevice::Text)) {
-        QMessageBox::warning(this, tr("Write Failed"), tr("Failed to open file: ") + ball_B_path);
-        return;
-    }
-
-    QTextStream out(&file);
-    out << QString::number(sensor, 'f', 6) << "\n";
-    file.close();
-}
-
-
-void MainWindow::on_lcdNumberSingleChannelResult_overflow()
-{
-
-}
-
-
-
-void MainWindow::mahrSensor77()
-{
-    jingtai[jishu]=g_Global->g_measureResult[g_Global->singleChannelIndex];
-    //jiaodu[jishu]=plcController->newangle;
-    jishu++;
-    if(jishu > jingtai.size()-2)
-    {
-        mahrTimer77->stop();
-        //QString savePath = "E:/Code/QT/auto_measurement_cmake_521-77/data/jingtai_data.txt";
-        QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-        QString basePath = ui->cali_data_root->text().trimmed();
-
-        // 参数校验，无效时提前返回。
-        if (basePath.isEmpty()) {
-            qWarning() << "鏍囧畾璺緞涓虹┖";
-            return; // 终止后续操作，防止崩溃
-        }
-
-        // 参数校验，无效时提前返回。
-        // 参数校验，无效时提前返回。
-        if (!basePath.endsWith(QDir::separator())) {
-            basePath += QDir::separator();
-        }
-        QString savename = QString("jingtai_%1.txt").arg(timeStr);
-        QString savePath = basePath + savename;
-        //QString savePath = QString("E:/Code/QT/auto_measurement_cmake_521-77/data/jingtai_data_%1.txt")
-        saveJingtaiToFile(jingtai, savePath);
-        ui->plainTextEdit->appendPlainText(QString("jingtai save succeed!%1").arg(timeStr));
-    }
-
-}
-
-
-void MainWindow::on_Motionless_clicked()
-{
-    // mahrTimer77->start();
-    jishu = 0 ;
-
-    mahrTimer77 = new QTimer(this);
-    mahrTimer77->start(100);
-    connect(mahrTimer77,&QTimer::timeout,this,&MainWindow::mahrSensor77);
-    QString uu="jingtai is begin!";
-    ui->plainTextEdit->appendPlainText(uu);
-
-}
-
-void MainWindow::saveJingtaiToFile( QVector<double>& jingtai, const QString& filePath) {
-    QFile file(filePath);
-
-    // 参数校验，无效时提前返回。
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qDebug() << "fail" << file.errorString();
-        return;
-    }
-
-    QTextStream out(&file);
-
-    for (double value : jingtai) {
-        out << value << "\n"; // 写入数据并换行
-    }
-
-    file.close();
-    qDebug() << "数据保存成功，路径：" << filePath;
-}
-
-
-/*************************************************************************************
-  * ************************************************************************************/
-/*************************************************************************************
-  * ************************************************************************************/
-void MainWindow::on_Motion_clicked()
-{
-    jishu = 0 ;
-
-    mahrTimer77 = new QTimer(this);
-    mahrTimer77->start(100);
-    connect(mahrTimer77,&QTimer::timeout,this,&MainWindow::mahrSensor772);
-    QString uu="dongtai is begin!";
-    ui->plainTextEdit->appendPlainText(uu);
-}
-
-void MainWindow::mahrSensor772()
-{
-    // 参数校验，无效时提前返回。
-    if(abs((plcSnapshot.m_new_angle)-jishu)<1)
-    {
-        jingtai[jishu]=g_Global->g_measureResult[g_Global->singleChannelIndex];
-        jiaodu[jishu]=plcSnapshot.m_new_angle;
-        jishu++;
-        if(jishu > jingtai.size()-2)
-        {
-            mahrTimer77->stop();
-            //QString savePath = "E:/Code/QT/auto_measurement_cmake_521-77/data/jingtai_data.txt";
-            QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-            QString basePath = ui->cali_data_root->text().trimmed();
-
-            // 参数校验，无效时提前返回。
-            if (basePath.isEmpty()) {
-                qWarning() << "fail:cali_data_root is black";
-                return; // 终止后续操作，防止崩溃
-            }
-
-            // 参数校验，无效时提前返回。
-            // 参数校验，无效时提前返回。
-            if (!basePath.endsWith(QDir::separator())) {
-                basePath += QDir::separator();
-            }
-            QString savename = QString("dongtai_%1.txt").arg(timeStr);
-            QString savePath = basePath + savename;
-            //QString savePath = QString("E:/Code/QT/auto_measurement_cmake_521-77/data/dongtai_data_%1.txt")
-
-            saveTwoArraysToFile(jingtai,jiaodu, savePath);
-            ui->plainTextEdit->appendPlainText(QString("dongtai save succeed! %1").arg(timeStr));
-        }
-    }
-
-}
-
-void MainWindow::saveTwoArraysToFile(
-    const QVector<double>& jingtai,
-    const QVector<double>& jiaodu,
-    const QString& filePath
-    ) {
-    // 参数校验，无效时提前返回。
-    if (jingtai.size() != jiaodu.size()) {
-        qDebug() << "fail";
-        return;
-    }
-
-    QFile file(filePath);
-
-    // 参数校验，无效时提前返回。
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qDebug() << "fail" << file.errorString();
-        return;
-    }
-
-    QTextStream out(&file);
-
-    for (int i = 0; i < jingtai.size(); ++i) {
-        out << jingtai[i] << " " << jiaodu[i] << "\n";
-    }
-
-    file.close();
-    qDebug() << "write yes" << filePath;
-}
-
-
-/*************************************************************************************
-  * ************************************************************************************/
-
-/***********************************************************************************************************************************************************************************************
- * ********************************************************************************************************************************************************************************************/
-void MainWindow::on_SingleCenterMeasure_clicked()
-{
-
-    jishu = 0 ;
-    mahrTimer77 = new QTimer(this);
-    mahrTimer77->start(30);
-    connect(mahrTimer77,&QTimer::timeout,this,&MainWindow::mahrSensor773);
-    QString uu="dancipianxincaijikais";
-    ui->plainTextEdit->appendPlainText(uu);
-    ui->progressBar->setValue(0);
-
-}
-
-
-
-
-
-void MainWindow::mahrSensor773()
-{
-    ui->progressBar->setValue(jishu*100/1022);
-    if(abs((plcSnapshot.m_new_angle)-jishu*0.35)<0.5)
-    {
-        if(g_Global->g_measureResult[g_Global->singleChannelIndex]<2.0)
-        {
-        cgq2[jishu]=g_Global->g_measureResult[g_Global->singleChannelIndex];
-        jiaodu2[jishu]=plcSnapshot.m_new_angle;
-
-        jishu++;
-        if(jishu > cgq2.size()-1)
-        {
-            mahrTimer77->stop();
-            //QString savePath = "E:/Code/QT/auto_measurement_cmake_pxqingxie/data/pianxin.txt";
-            QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-
-            //QString savePath = QString("E:/Code/QT/auto_measurement_cmake_pxqingxie/data/pianxin_%1.txt")
-
-            //saveTwoArraysToFile(cgq2,jiaodu2, savePath);
-            //ui->plainTextEdit->appendPlainText(QString("dongtaicaijijieshu%1").arg(timeStr));
-            QVector<double> center = fitCircleCenter(cgq2, jiaodu2);
-            ui->pianxinX->display(QString::number(center[0], 'f', 4));
-            ui->pianxinY->display(QString::number(center[1], 'f', 4));
-            //QThread::msleep(500);
-            // mahrTimer->stop();
-            QTimer::singleShot(500, this, [=]() {
-                emit emit_move_motor(center[0],center[1],52,24,56,25); // 缁惧灝婀€5鐟欙箑褰傞崥顖氬З
-            });
-            // mahrTimer->start();
-            // QTimer::singleShot(500, this, [=]() {
-            // });
-
-            // QThread::msleep(2000);
-
-            // (double center,double reg_adress,double xian_adress)
-            // QTimer::singleShot(500, this, [=]() {});
-            // plcController->HoldingRegisters(center[0], 52);
-            // QTimer::singleShot(500, this, [=]() {
-            // });
-
-
-
-            // plcController->HoldingRegisters(center[1], 56);
-            // QTimer::singleShot(500, this, [=]() {
-            // });
-
-            //cgq2.clear();
-            //jiaodu2.clear();
-
-            ui->plainTextEdit->appendPlainText(QString("pianxin is succeed!%1").arg(timeStr));
-             //std::cout<<center[0]<<std::endl;
-             //std::cout<<center[1]<<std::endl;
-
-
-            QLabel *label = findChild<QLabel*>("label_56");
-            if (!label) return; // 防止Label不存在
-
-            // 参数校验，无效时提前返回。
-            if (isYellow) {
-                label->setStyleSheet("background-color: green;"); // 鍒囨崲涓虹豢鑹?
-            } else {
-                label->setStyleSheet("background-color: yellow;"); // 鍒囨崲涓洪粍鑹?
-            }
-            isYellow = !isYellow; // 翻转标记
-
-        }
-        }
-    }
-
-}
-
-
-
-QVector<double> MainWindow::fitCircleCenter(const QVector<double>& l, const QVector<double>& a)
-{
-    /*// 1. 涓ユ牸鐨勮緭鍏ュ悎娉曟€ф牎楠?
-    if (l.isEmpty() || a.isEmpty() || l.size() != a.size()) {
-        qWarning() << "杈撳叆鏁扮粍涓虹┖鎴栭暱搴︿笉鍖归厤锛?;
-        return {0.0, 0.0};
-    }
-    const int pointCount = l.size();
-    if (pointCount < 3) {
-        qWarning() << "鑷冲皯闇€瑕?涓偣鎵嶈兘鎷熷悎鍦嗗績锛?;
-        return {0.0, 0.0};
-    }
-
-    for (double len : l) {
-        if (len < 0) {
-            qWarning() << "闀垮害鍊间笉鑳戒负璐熸暟锛? << len;
-            return {0.0, 0.0};
-        }
-    }
-*/
-    const int pointCount = l.size();
-    QVector<double> xList, yList;
-    for (int i = 0; i < pointCount; ++i) {
-        double angleDeg = fmod(270.0 - a[i], 360.0);
-        if (angleDeg < 0) angleDeg += 360.0;
-
-        double angleRad = qDegreesToRadians(angleDeg);
-        double radius = l[i] + 20; // 避免重复计算
-        double x = -radius * cos(angleRad);
-        double y = -radius * sin(angleRad);
-
-        xList.append(x);
-        yList.append(y);
-    }
-
-    double n = pointCount;
-    double sumX = 0.0, sumY = 0.0;
-    double sumX2 = 0.0, sumY2 = 0.0, sumXY = 0.0;
-    double sumX3y2 = 0.0, sumX2y3 = 0.0, sumX2y2 = 0.0;
-
-    for (int i = 0; i < pointCount; ++i) {
-        double x = xList[i];
-        double y = yList[i];
-        double x2 = x * x;
-        double y2 = y * y;
-        double x2y2 = x2 + y2; // x+y
-
-        sumX += x;
-        sumY += y;
-        sumX2 += x2;
-        sumY2 += y2;
-        sumXY += x * y;
-        sumX3y2 += x * x2y2;  // x*(x+y) = x + xy
-        sumX2y3 += y * x2y2;  // y*(x+y) = xy + y
-        sumX2y2 += x2y2;      // sum(x+y)
-    }
-
-    // M * [A,B,C]^T = V
-    double M11 = sumX2;
-    double M12 = sumXY;
-    double M13 = sumX;
-    double M21 = sumXY;
-    double M22 = sumY2;
-    double M23 = sumY;
-    double M31 = sumX;
-    double M32 = sumY;
-    double M33 = n;
-
-    double V1 = sumX3y2;
-    double V2 = sumX2y3;
-    double V3 = sumX2y2;
-
-    double detM = M11*(M22*M33 - M23*M32)
-                  - M12*(M21*M33 - M23*M31)
-                  + M13*(M21*M32 - M22*M31);
-
-    const double EPS = 1e-8;
-    if (fabs(detM) < EPS) {
-        qWarning() << "鐐归泦鍏辩嚎鎴栨暟鍊煎寮傦紝鏃犳硶鎷熷悎鍦嗗績锛佽鍒楀紡鍊硷細" << detM;
-        return {0.0, 0.0};
-    }
-
-    double detA = V1*(M22*M33 - M23*M32)
-                  - M12*(V2*M33 - M23*V3)
-                  + M13*(V2*M32 - M22*V3);
-
-    double detB = M11*(V2*M33 - M23*V3)
-                  - V1*(M21*M33 - M23*M31)
-                  + M13*(M21*V3 - V2*M31);
-
-    double A = detA / detM;
-    double B = detB / detM;
-
-    double x0 = A / 2.0;
-    double y0 = B / 2.0;
-
-    // double C = (V3 - M31*A - M32*B) / M33;
-    // double r = sqrt(x0*x0 + y0*y0 - C);
-
-    return {x0, y0};
-}
-
-
-
-
-
-
-
-
-
-/*******************************************************************************************************************************************************************************
- * **********************************************************************************************************************************************************************************/
-
-
-void MainWindow::on_ReadDistance_clicked()
-{
-    QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "閫夋嫨TXT鏂囦欢",
-        QDir::homePath(), // 默认路径：用户主目录
-        "鏂囨湰鏂囦欢 (*.txt);;鎵€鏈夋枃浠?(*.*)"
-        );
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { // 鎵撳紑澶辫触
-        QMessageBox::critical(this, "閿欒", "文件打开失败:" + file.errorString());
-        return;
-    }
-
-    dataVector.clear();
-
-    QTextStream in(&file);
-    int lineNum = 0; // 琛屽彿锛岀敤浜庡畾浣嶉敊璇?
-    while (!in.atEnd()) {
-        lineNum++;
-        QString line = in.readLine().trimmed(); // 璇诲彇涓€琛屽苟鍘婚櫎棣栧熬绌烘牸
-        if (line.isEmpty()) continue; // 跳过空行
-
-        QStringList numStrList = line.split(QRegExp("[,\\s\\t]+"), Qt::SkipEmptyParts);
-        for (const QString &numStr : numStrList) {
-            bool ok;
-            double num = numStr.toDouble(&ok); // 转换为double
-            if (ok) {
-                dataVector.append(num); // 转换成功，加入vector
-            } else {
-            }
-        }
-    }
-
-    file.close();
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-    ui->plainTextEdit->appendPlainText(QString("wenjianduquchenggong%1").arg(timeStr));
-}
-
-void MainWindow::on_Readangle_clicked()
-{
-    QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "閫夋嫨TXT鏂囦欢",
-        QDir::homePath(), // 默认路径：用户主目录
-        "鏂囨湰鏂囦欢 (*.txt);;鎵€鏈夋枃浠?(*.*)"
-        );
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { // 鎵撳紑澶辫触
-        QMessageBox::critical(this, "閿欒", "文件打开失败:" + file.errorString());
-        return;
-    }
-
-    dataVector2.clear();
-
-    QTextStream in(&file);
-    int lineNum = 0; // 琛屽彿锛岀敤浜庡畾浣嶉敊璇?
-    while (!in.atEnd()) {
-        lineNum++;
-        QString line = in.readLine().trimmed(); // 璇诲彇涓€琛屽苟鍘婚櫎棣栧熬绌烘牸
-        if (line.isEmpty()) continue; // 跳过空行
-
-        QStringList numStrList = line.split(QRegExp("[,\\s\\t]+"), Qt::SkipEmptyParts);
-        for (const QString &numStr : numStrList) {
-            bool ok;
-            double num = numStr.toDouble(&ok); // 转换为double
-            if (ok) {
-                dataVector2.append(num); // 转换成功，加入vector
-            } else {
-            }
-        }
-    }
-
-    file.close();
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-    ui->plainTextEdit->appendPlainText(QString("file read succeed!%1").arg(timeStr));
-    QVector<double> center = fitCircleCenter(dataVector, dataVector2);
-    ui->pianxinX->display(QString::number(center[0], 'f', 4));
-    ui->pianxinY->display(QString::number(center[1], 'f', 4));
-    std::cout<<center[0]<<std::endl;
-    std::cout<<center[1]<<std::endl;
-    ui->plainTextEdit->appendPlainText(QString("yunaxin is succeed!%1").arg(timeStr));
-}
-
-/*******************************************************************************************************************************************************************************
- * **********************************************************************************************************************************************************************************/
-void MainWindow::on_sensorE_move_clicked()
-{
-    QString target =  ui->txtSensorE_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target, addressxin_reg_1, addressxin_cyl_1 , 500) ;
-}
-
-void MainWindow::on_sensorF_move_clicked()
-{
-    QString target =  ui->txtSensorF_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target, addressxin_reg_2, addressxin_cyl_2 , 500) ;
-}
-
-void MainWindow::on_sensorA_move_clicked()
-{
-  QString target =  ui->txtSensorA_target->text();
-  double Target = target.toDouble() ;
-  sendRegistersAndVar(Target, addressqing_reg_1, addressqing_cyl_1 , 500) ;
-
-  // QTimer::singleShot(400, this, [=]() {
-  //     sendRegistersAndVar(0.0-Target, addressqing_reg_3, addressqing_cyl_3 , 500) ;
-  // });
-}
-
-void MainWindow::on_sensorB_move_clicked()
-{
-    QString target =  ui->txtSensorB_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target,addressqing_reg_2, addressqing_cyl_2 , 500) ;
-
-    // QTimer::singleShot(400, this, [=]() {
-    //     sendRegistersAndVar(0.0-Target, addressqing_reg_4, addressqing_cyl_4 , 500) ;
-    // });
-}
-
-void MainWindow::on_sensorC_move_clicked()
-{
-    QString target =  ui->txtSensorC_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target, addressqing_reg_3, addressqing_cyl_3 , 500) ;
-    // QTimer::singleShot(400, this, [=]() {
-    //     sendRegistersAndVar(Target, addressqing_reg_3, addressqing_cyl_3 , 500) ;
-    // });
-}
-
-void MainWindow::on_sensorD_move_clicked()
-{
-    QString target =  ui->txtSensorD_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target, addressqing_reg_4, addressqing_cyl_4 , 500) ;
-}
-
-void MainWindow::on_smallRotate_angle_move_clicked()
-{
-     QString target =  ui->txtsmallRotate_angle_target->text();
-    double Target = target.toDouble() ;
-    sendRegistersAndVar(Target, 60, 19 , 500) ;
-}
-
-
-/*******************************************************************************************************************************************************************************
- * **********************************************************************************************************************************************************************************/
-void MainWindow::on_RecordMeasure_clicked()
-{
-    jishu = 0 ;
-
-    mahrTimer77 = new QTimer(this);
-    mahrTimer77->start(30);
-    connect(mahrTimer77,&QTimer::timeout,this,&MainWindow::mahrSensor774);
-    QString uu="danciqingxie is begin!";
-    ui->plainTextEdit->appendPlainText(uu);
-    ui->progressBar_2->setValue(0);
-}
-
-
-void MainWindow::mahrSensor774()
-{
-    ui->progressBar_2->setValue(jishu*100/1022);
-    if(abs((plcSnapshot.m_new_angle)-jishu*0.35)<0.5)
-    {
-        if(g_Global->g_measureResult[g_Global->singleChannelIndex]<3.0)
-        {
-        cgq3[jishu]=g_Global->g_measureResult[g_Global->singleChannelIndex];
-        jiaodu3[jishu]=plcSnapshot.m_new_angle;
-        jishu++;
-        if(jishu > cgq3.size()-1)
-        {
-            mahrTimer77->stop();
-            //QString savePath = "E:/Code/QT/auto_measurement_cmake_pxqingxie/data/pianxin.txt";
-            QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-
-            //QString savePath = QString("E:/Code/QT/auto_measurement_cmake_pxqingxie/data/qingxie_%1.txt")
-
-            //saveTwoArraysToFile(cgq3,jiaodu3, savePath);
-            //ui->plainTextEdit->appendPlainText(QString("dongtaicaijijieshu%1").arg(timeStr));
-            QString target =  ui->txtSensorD_target_2->text();
-            banjing = target.toDouble() ;
-            QVector<double> center = fitPlaneNormal(cgq3, jiaodu3,banjing);
-            double xweiyi= atan(center[0])*182.528765;// X轴电机正方向一侧
-            double yweiyi= atan(center[1])*182.528765;// Y轴电机正方向一侧
-            ui->qingxieX->display(QString::number(center[0], 'f', 5));
-            ui->qingxieY->display(QString::number(center[1], 'f', 5));
-            ui->lcdNumber->display(QString::number(center[0]*180.0, 'f', 4));
-            ui->lcdNumber_2->display(QString::number(center[1]*180.0, 'f', 4));
-            ui->plainTextEdit->appendPlainText(QString("xianglaing is succeed!%1").arg(timeStr));
-
-
-
-            QLabel *label = findChild<QLabel*>("label_71");
-            if (!label) return; // 防止Label不存在
-
-            // 参数校验，无效时提前返回。
-            if (isYellow1) {
-                label->setStyleSheet("background-color: green;"); // 鍒囨崲涓虹豢鑹?
-            } else {
-                label->setStyleSheet("background-color: yellow;"); // 鍒囨崲涓洪粍鑹?
-            }
-            isYellow1 = !isYellow1; // 翻转标记
-
-        }
-        }
-    }
-
-}
-
-QVector<double> MainWindow::fitPlaneNormal(const QVector<double>& l, const QVector<double>& a, double r)
-{
-    // 将极坐标(l, a)转换为笛卡尔坐标(x, y, z)，通过 SVD 拟合平面法向量
-    const int pointCount = l.size();
-    if (pointCount < 3) { // 至少3个点才能拟合平面
-        qWarning() << "[fitPlaneNormal] 鐐规暟閲忎笉瓒?鏃犳硶鎷熷悎骞抽潰!";
-        return {0.0, 0.0};
-    }
-
-    QVector<double> xList, yList, zList;
-    for (int i = 0; i < pointCount; ++i) {
-        double angleRaw = 270.0 - a[i];
-        double angleNorm = fmod(angleRaw, 360.0);
-        if (angleNorm < 0.0) {
-            angleNorm += 360.0;
-        }
-
-        double angleRad = qDegreesToRadians(angleNorm);
-        double x = r * cos(angleRad);
-        double y = r * sin(angleRad);
-        double z = 10.0 - l[i]; // 若物理意义错误，需根据实际场景调整
-
-        xList.append(x);
-        yList.append(y);
-        zList.append(z);
-    }
-
-    double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
-    for (int i = 0; i < pointCount; ++i) {
-        sumX += xList[i];
-        sumY += yList[i];
-        sumZ += zList[i];
-    }
-    double xMean = sumX / pointCount;
-    double yMean = sumY / pointCount;
-    double zMean = sumZ / pointCount;
-
-    double Sxx = 0.0, Syy = 0.0, Szz = 0.0;
-    double Sxy = 0.0, Sxz = 0.0, Syz = 0.0;
-    for (int i = 0; i < pointCount; ++i) {
-        double dx = xList[i] - xMean;
-        double dy = yList[i] - yMean;
-        double dz = zList[i] - zMean;
-
-        Sxx += dx * dx;
-        Syy += dy * dy;
-        Szz += dz * dz;
-        Sxy += dx * dy;
-        Sxz += dx * dz;
-        Syz += dy * dz;
-    }
-
-    // Sxx*A + Sxy*B = -Sxz*C
-    // Sxy*A + Syy*B = -Syz*C
-    double denominator = Sxx * Syy - Sxy * Sxy; // 鍒嗘瘝锛屼笉鑳戒负0
-    const double EPS = 1e-8;
-    if (fabs(denominator) < EPS) {
-        qWarning() << "[fitPlaneNormal] 鍗忔柟宸煩闃佃鍒楀紡鎺ヨ繎0锛岀偣闆嗗叡绾匡紒";
-        return {0.0, 0.0};
-    }
-
-    double A = (Sxy * Syz - Syy * Sxz) / denominator;
-    double B = (Sxy * Sxz - Sxx * Syz) / denominator;
-
-    double nx = A;
-    double ny = B;
-
-    return {nx, ny};
-}
-
-
-
-
-/*******************************************************************************************************************************************************************************
- * **********************************************************************************************************************************************************************************/
-void MainWindow::on_ReadHeight_clicked()
-{
-    QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "閫夋嫨TXT鏂囦欢",
-        QDir::homePath(), // 默认路径：用户主目录
-        "鏂囨湰鏂囦欢 (*.txt);;鎵€鏈夋枃浠?(*.*)"
-        );
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { // 鎵撳紑澶辫触
-        QMessageBox::critical(this, "閿欒", "文件打开失败:" + file.errorString());
-        return;
-    }
-
-    dataVector.clear();
-
-    QTextStream in(&file);
-    int lineNum = 0; // 琛屽彿锛岀敤浜庡畾浣嶉敊璇?
-
-    while (!in.atEnd()) {
-        lineNum++;
-
-        QString line = in.readLine().trimmed(); // 璇诲彇涓€琛屽苟鍘婚櫎棣栧熬绌烘牸
-        if (line.isEmpty()) {
-            continue; // 跳过空行
-        }
-
-        QStringList numStrList = line.split(QRegExp("[,\\s\\t]+"), Qt::SkipEmptyParts);
-
-        for (const QString &numStr : numStrList) {
-            bool ok;
-            double num = numStr.toDouble(&ok); // 转换为double
-
-            if (ok) {
-                dataVector.append(num); // 转换成功，加入数据缓存
-            } else {
-                // ui->plainTextEdit_log->appendPlainText(
-                // );
-            }
-        }
-    }
-
-    file.close();
-
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-    ui->plainTextEdit->appendPlainText(QString("鏂囦欢璇诲彇鎴愬姛锛?1").arg(timeStr));
-}
-
-
-void MainWindow::on_ReadAngle_clicked()
-{
-    QString filePath = QFileDialog::getOpenFileName(
-        this,
-        "閫夋嫨TXT鏂囦欢",
-        QDir::homePath(), // 默认路径：用户主目录
-        "鏂囨湰鏂囦欢 (*.txt);;鎵€鏈夋枃浠?(*.*)"
-        );
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) { // 鎵撳紑澶辫触
-        QMessageBox::critical(this, "閿欒", "文件打开失败:" + file.errorString());
-        return;
-    }
-
-    dataVector2.clear();
-
-    QTextStream in(&file);
-    int lineNum = 0; // 琛屽彿锛岀敤浜庡畾浣嶉敊璇?
-
-    while (!in.atEnd()) {
-        lineNum++;
-
-        QString line = in.readLine().trimmed(); // 璇诲彇涓€琛屽苟鍘婚櫎棣栧熬绌烘牸
-        if (line.isEmpty()) {
-            continue; // 跳过空行
-        }
-
-        QStringList numStrList = line.split(QRegExp("[,\\s\\t]+"), Qt::SkipEmptyParts);
-
-        for (const QString &numStr : numStrList) {
-            bool ok;
-            double num = numStr.toDouble(&ok); // 转换为double
-
-            if (ok) {
-                dataVector2.append(num); // 转换成功，加入数据缓存
-            } else {
-                // ui->plainTextEdit_log->appendPlainText(
-                // );
-            }
-        }
-    }
-
-    file.close();
-
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-    ui->plainTextEdit->appendPlainText(QString("鏂囦欢璇诲彇鎴愬姛锛?1").arg(timeStr));
-
-    QString target = ui->txtSensorD_target_2->text();
-    banjing = target.toDouble();
-
-    QVector<double> center = fitPlaneNormal(dataVector, dataVector2, banjing);
-
-    double xweiyi = atan(center[0]) * 182.528765; // X轴电机正方向一侧的位移
-    double yweiyi = atan(center[1]) * 182.528765; // Y轴电机正方向一侧的位移
-
-    ui->qingxieX->display(QString::number(center[0], 'f', 5));
-    ui->qingxieY->display(QString::number(center[1], 'f', 5));
-
-    ui->lcdNumber->display(QString::number(center[0] * 180, 'f', 4));
-    ui->lcdNumber_2->display(QString::number(center[1] * 180, 'f', 4));
-
-    ui->plainTextEdit->appendPlainText(QString("娉曞悜閲忚绠楀畬鎴愶細%1").arg(timeStr));
-}
-
-
-/*******************************************************************************************************************************************************************************
- * **********************************************************************************************************************************************************************************/
-void MainWindow::on_RecordCenter_clicked()
-{
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-
-    QString basePath = ui->cali_data_root->text().trimmed();
-
-    // 参数校验，无效时提前返回。
-    if (basePath.isEmpty()) {
-        qWarning() << "閿欒:cali_data_root 涓虹┖!";
-        return; // 终止后续操作，防止崩溃
-    }
-
-    // 参数校验，无效时提前返回。
-    // 参数校验，无效时提前返回。
-    if (!basePath.endsWith(QDir::separator())) {
-        basePath += QDir::separator();
-    }
-
-    QString savename = QString("pianxin_%1.txt").arg(timeStr);
-    QString savePath = basePath + savename;
-
-    saveTwoArraysToFile(cgq2, jiaodu2, savePath);
-
-    ui->plainTextEdit->appendPlainText(QString("偏心数据保存成功，?1").arg(timeStr));
-}
-
-
-void MainWindow::on_RecordTilt_clicked()
-{
-    QString timeStr = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
-
-    QString basePath = ui->cali_data_root->text().trimmed();
-
-    // 参数校验，无效时提前返回。
-    if (basePath.isEmpty()) {
-        qWarning() << "閿欒:cali_data_root 涓虹┖!";
-        return; // 终止后续操作，防止崩溃
-    }
-
-    // 参数校验，无效时提前返回。
-    // 参数校验，无效时提前返回。
-    if (!basePath.endsWith(QDir::separator())) {
-        basePath += QDir::separator();
-    }
-
-    QString savename = QString("qingxie_%1.txt").arg(timeStr);
-    QString savePath = basePath + savename;
-
-    saveTwoArraysToFile(cgq3, jiaodu3, savePath);
-
-    ui->plainTextEdit->appendPlainText(QString("倾斜数据保存成功，?1").arg(timeStr));
-}
-
-
-void MainWindow::on_emergency_stop_clicked()
-{
-    postPlcMoveToAbsolutePosition(1, 18);
-}
-
-
-/***************************************************************************************************************
- * *********************************************************************************/
-void MainWindow::initChartContainer()
-{
-    m_chartView = new QChartView();
-    m_chartView->setRenderHint(QPainter::Antialiasing); // 抗锯齿，使曲线更平滑
-
-    QGridLayout *layout = qobject_cast<QGridLayout*>(ui->chartWidget->layout());
-    if (!layout) {
-        layout = new QGridLayout(ui->chartWidget);
-        layout->setContentsMargins(0, 0, 0, 0);
-    }
-
-    layout->addWidget(m_chartView);
-}
-
-
-void MainWindow::Draw()
-{
-    QVector<double> cgqcd;
-    QVector<double> jiaoducd;
-
-    cgqcd = cgq2.mid(0, jishu);
-    jiaoducd = jiaodu2.mid(0, jishu);
-
-    updatePolarChart(cgqcd, jiaoducd);
-
-    // qDebug() << "update";
-}
-
-
-
-void MainWindow::updatePolarChart(const QVector<double> &cgq33, const QVector<double> &jiaodu33)
-{
-    QVector<double> cgq22;
-    for (double val : cgq33) {
-        cgq22.append(val + 0.3); // 每个元素加 0.3
-    }
-
-    m_polarChart = new QPolarChart();
-    m_polarChart->setTitle("pianxin tuxiang");
-
-    QScatterSeries *scatterSeries = new QScatterSeries();
-    scatterSeries->setName("cgq-jiaodu");
-    scatterSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle); // 圆形散点
-    scatterSeries->setMarkerSize(4); // 散点大小
-    scatterSeries->setPen(QPen(Qt::red, 1)); // 散点边框
-    scatterSeries->setBrush(Qt::red); // 散点填充色
-
-    for (int i = 0; i < jiaodu33.size(); ++i) {
-        double convertedAngle = 270.0 - jiaodu33[i];
-        convertedAngle = fmod(convertedAngle + 360.0, 360.0);
-
-        scatterSeries->append(convertedAngle, cgq22[i]);
-    }
-
-    m_polarChart->addSeries(scatterSeries);
-
-    QValueAxis *angleAxis = new QValueAxis();
-    angleAxis->setTickCount(9);
-    angleAxis->setLabelFormat("%d");
-    angleAxis->setRange(0, 360);
-    m_polarChart->addAxis(angleAxis, QPolarChart::PolarOrientationAngular);
-
-    QValueAxis *radiusAxis = new QValueAxis();
-    radiusAxis->setTickCount(6);
-    radiusAxis->setLabelFormat("%.3f");
-    double minDistance = *std::min_element(cgq22.begin(), cgq22.end());
-    double maxDistance = *std::max_element(cgq22.begin(), cgq22.end());
-    radiusAxis->setRange(qMax(0.0, minDistance * 0.7), maxDistance * 1.1);
-    m_polarChart->addAxis(radiusAxis, QPolarChart::PolarOrientationRadial);
-
-    scatterSeries->attachAxis(angleAxis);
-    scatterSeries->attachAxis(radiusAxis);
-
-    m_chartView->setChart(m_polarChart);
-    m_chartView->setRenderHint(QPainter::Antialiasing);
-}
-
-
-
-
-
-void MainWindow::mahrSensorpx()
-{
-    updatePolarChart(cgq2, jiaodu2);
-}
-
-
- void MainWindow::move_motor(double center,double center2,double reg_adress,double xian_adress,double reg_adress2,double xian_adress2)
- {  std::cout<<center<<std::endl;
-     postPlcWriteHoldingRegisters(center, reg_adress);
-     QTimer::singleShot(500, this, [=]() {
-         postPlcMoveToAbsolutePosition(1, xian_adress); // 缁惧灝婀€5鐟欙箑褰傞崥顖氬З
-     });
-
-     QTimer::singleShot(1000, this, [=]() {
-         postPlcWriteHoldingRegisters(center2, reg_adress2);
-         QTimer::singleShot(500, this, [=]() {
-             postPlcMoveToAbsolutePosition(1, xian_adress2); // 缁惧灝婀€5鐟欙箑褰傞崥顖氬З
-         });
-     });
-    mahrTimer->start(100);
- }
-
-void MainWindow::move_motor_z(double bottom_position_z,double reg_adress_z,double xian_adress_z)
- {
-    std::cout<<bottom_position_z<<std::endl;
-    postPlcWriteHoldingRegisters(bottom_position_z, reg_adress_z);
-    QTimer::singleShot(500, this, [=]() {
-        postPlcMoveToAbsolutePosition(1, xian_adress_z); // 缁惧灝婀€5鐟欙箑褰傞崥顖氬З
-    });
-
-    mahrTimer->start(100);
- }
-
- void MainWindow::move_motor_t(double tiltX, double tiltY, double eccX, double eccY,
-                               double reg_adress_t_x, double xian_adress_t_x,
-                               double reg_adress_t_y, double xian_adress_t_y,
-                               double reg_adress_c_x, double xian_adress_c_x,
-                               double reg_adress_c_y, double xian_adress_c_y)
- {
-     double targetTiltX = plcSnapshot.m_tiaoqing1 + (tiltX * 120.0);
-     //double targetTiltX = 0.5;
-     std::cout << "Tilt-X target: " << targetTiltX << std::endl;
-     postPlcWriteHoldingRegisters(targetTiltX, reg_adress_t_x);
-     QTimer::singleShot(500, this, [=]() {
-         postPlcMoveToAbsolutePosition(1, xian_adress_t_x);
-     });
-
-     QTimer::singleShot(1000, this, [=]() {
-        double targetTiltY = plcSnapshot.m_tiaoqing2 + (tiltY * 80.0);
-        //double targetTiltY = 0.5;
-         std::cout << "Tilt-Y target: " << targetTiltY << std::endl;
-         postPlcWriteHoldingRegisters(targetTiltY, reg_adress_t_y);
-         QTimer::singleShot(500, this, [=]() {
-             postPlcMoveToAbsolutePosition(1, xian_adress_t_y);
-         });
-    });
-
-     mahrTimer->start(100);
- }
-
-void MainWindow::stop_timer()
- {
-    mahrTimer->stop();
- }
-
- void MainWindow::start_timer()
- {
-     mahrTimer->start(100);
- }
-
-
-
-
-
-
- void MainWindow::on_btnShowJogPanel_clicked()
- {
-     if (!jogPanel) {
-         return;
-     }
-
-     if (jogPanel->isVisible()) {
-         jogPanel->hide();
-     } else {
-         jogPanel->show();
-         jogPanel->raise();
-         jogPanel->activateWindow();
-         this->activateWindow();
-         this->setFocus();
-     }
- }
-
-
- void MainWindow::setJogButtonDown(JogAxis axis, JogDir dir, bool down)
- {
-     if (!jogPanel)
-         return;
-
-     if (axis == JogAxis::X && dir == JogDir::Positive) {
-         jogPanel->setXPositiveDown(down);
-     } else if (axis == JogAxis::X && dir == JogDir::Negative) {
-         jogPanel->setXNegativeDown(down);
-     } else if (axis == JogAxis::Y && dir == JogDir::Positive) {
-         jogPanel->setYPositiveDown(down);
-     } else if (axis == JogAxis::Y && dir == JogDir::Negative) {
-         jogPanel->setYNegativeDown(down);
-     } else if (axis == JogAxis::Z && dir == JogDir::Positive) {
-         jogPanel->setZPositiveDown(down);
-     } else if (axis == JogAxis::Z && dir == JogDir::Negative) {
-         jogPanel->setZNegativeDown(down);
-     }
- }
-
-
- void MainWindow::emergencyStopJog()
- {
-     postPlcMoveToAbsolutePosition(1, 18);
-
-     QTimer::singleShot(ESTOP_PULSE_MS, this, [=]() {
-         postPlcMoveToAbsolutePosition(0, 18);
-     });
- }
-
-
- void MainWindow::clearAllJogKeyStates()
- {
-     aKeyPressed = false;
-     dKeyPressed = false;
-     leftKeyPressed = false;
-     rightKeyPressed = false;
-     upKeyPressed = false;
-     downKeyPressed = false;
-
-     setJogButtonDown(JogAxis::X, JogDir::Positive, false);
-     setJogButtonDown(JogAxis::X, JogDir::Negative, false);
-     setJogButtonDown(JogAxis::Y, JogDir::Positive, false);
-     setJogButtonDown(JogAxis::Y, JogDir::Negative, false);
-     setJogButtonDown(JogAxis::Z, JogDir::Positive, false);
-     setJogButtonDown(JogAxis::Z, JogDir::Negative, false);
- }
-
-
- void MainWindow::requestStartJog(JogAxis axis, JogDir dir)
- {
-     // 参数校验，无效时提前返回。
-     if (jogActive && currentJogAxis == axis && currentJogDir == dir)
-         return;
-
-     pendingJog.valid = true;
-     pendingJog.axis = axis;
-     pendingJog.dir = dir;
-
-     // 参数校验，无效时提前返回。
-     if (jogBusy)
-         return;
-
-     // 参数校验，无效时提前返回。
-     if (!jogActive) {
-         PendingJogCommand cmd = pendingJog;
-         pendingJog.valid = false;
-         doStartJog(cmd.axis, cmd.dir);
-         return;
-     }
-
-     doStopJog();
- }
-
-
- void MainWindow::doStartJog(JogAxis axis, JogDir dir)
- {
-     jogBusy = true;
-     jogStopping = false;
-
-     ++jogCommandId;
-     ++speedRestoreId;
-
-     currentJogAxis = axis;
-     currentJogDir = dir;
-     jogActive = true;
-
-     // mahrTimer->stop();
-
-     m_jogVelocity = ui->keyPosition_Velocity->text().toDouble();
-     postPlcWriteHoldingRegisters(m_jogVelocity, 28);
-
-     // double target = (dir == JogDir::Positive) ? 1000.0 : -1000.0;
-
-     // int addr1 = 0;
-     int addr2 = 0;
-
-     switch (axis) {
-     case JogAxis::X:
-         // addr1 = address_x1;
-         addr2 = (dir == JogDir::Positive) ? 12 : 17;
-         break;
-     case JogAxis::Y:
-         // addr1 = address_y1;
-         addr2 = (dir == JogDir::Positive) ? 8 : 13;
-         break;
-     case JogAxis::Z:
-         // addr1 = address_z1;
-         addr2 = (dir == JogDir::Positive) ? 10 : 15;
-         break;
-         // 后续需要看情况补充调心调倾部分控制
-     // case JogAxis::AdjustA:
-     //     // addr1 = addressxin_reg_1;
-     //     addr2 = addressxin_cyl_1;
-     //     break;
-     // case JogAxis::AdjustB:
-     //     // addr1 = addressxin_reg_2;
-     //     addr2 = addressxin_cyl_2;
-     //     break;
-     default:
-         jogBusy = false;
-         return;
-     }
-
-
-     int currentId = jogCommandId;
-
-     QTimer::singleShot(START_DELAY_MS, this, [=]() {
-         if (currentId != jogCommandId)
-             return;
-
-         if (!jogActive)
-             return;
-
-         if (currentJogAxis != axis || currentJogDir != dir)
-             return;
-
-         // 点动方向线圈必须在按钮按住期间保持为 1。
-         // moveToAbsolutePosition() 会在 100 ms 后自动复位线圈，
-         // 用它启动点动会导致按住时也只产生一次短脉冲。
-         postPlcStartContinuousMovement(1, addr2);
-         jogBusy = false;
-         // mahrTimer->start(100);
-
-         // 参数校验，无效时提前返回。
-         if (pendingJog.valid &&
-             (pendingJog.axis != currentJogAxis || pendingJog.dir != currentJogDir)) {
-             doStopJog();
-         }
-     });
- }
-
-
- void MainWindow::doStopJog()
- {
-     if (!jogActive && !jogBusy)
-         return;
-
-     jogBusy = true;
-     jogStopping = true;
-     jogActive = false;
-
-     ++jogCommandId;
-
-     // mahrTimer->stop();
-
-     // 根据当前轴和方向计算停止线圈地址（与 doStartJog 一致）
-    int addr2 = 0;
-    switch (currentJogAxis) {
-    case JogAxis::X:
-        addr2 = (currentJogDir == JogDir::Positive) ? 12 : 17;
-        break;
-    case JogAxis::Y:
-        addr2 = (currentJogDir == JogDir::Positive) ? 8 : 13;
-        break;
-    case JogAxis::Z:
-        addr2 = (currentJogDir == JogDir::Positive) ? 10 : 15;
-        break;
-    default:
-        break;
-    }
-
-    if (addr2 != 0)
-        // 与启动配对，松开按钮时立即撤销保持的方向线圈。
-        postPlcStartContinuousMovement(0, addr2);
-
-     int restoreId = ++speedRestoreId;
-     QTimer::singleShot(RESTORE_SPEED_DELAY_MS, this, [=]() {
-         if (restoreId == speedRestoreId && !jogActive) {
-             postPlcWriteHoldingRegisters(m_positionVelocity, 28);
-         }
-     });
-
-     // mahrTimer->start(100);
-
-     QTimer::singleShot(STOP_SETTLE_MS, this, [=]() {
-         finishStopAndStartPending();
-
-     });
- }
-
-
- // 停止稳定后的收尾：清除停止状态，若停止期间收到换向请求（pendingJog）则立即启动新方向。
- void MainWindow::finishStopAndStartPending()
- {
-     currentJogAxis = JogAxis::None;
-     jogStopping = false;
-     jogBusy = false;
-
-     if (pendingJog.valid) {
-         PendingJogCommand cmd = pendingJog;
-         pendingJog.valid = false;
-         doStartJog(cmd.axis, cmd.dir);
-     }
- }
-
-
- void MainWindow::X_positive_pressed()
- {
-     requestStartJog(JogAxis::X, JogDir::Positive);
- }
-
- void MainWindow::X_positive_released()
- {
-     if (currentJogAxis == JogAxis::X && currentJogDir == JogDir::Positive) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::X_negative_pressed()
- {
-     requestStartJog(JogAxis::X, JogDir::Negative);
- }
-
- void MainWindow::X_negative_released()
- {
-     if (currentJogAxis == JogAxis::X && currentJogDir == JogDir::Negative) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::Y_positive_pressed()
- {
-     requestStartJog(JogAxis::Y, JogDir::Positive);
- }
-
- void MainWindow::Y_positive_released()
- {
-     if (currentJogAxis == JogAxis::Y && currentJogDir == JogDir::Positive) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::Y_negative_pressed()
- {
-     requestStartJog(JogAxis::Y, JogDir::Negative);
- }
-
- void MainWindow::Y_negative_released()
- {
-     if (currentJogAxis == JogAxis::Y && currentJogDir == JogDir::Negative) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::Z_positive_pressed()
- {
-     requestStartJog(JogAxis::Z, JogDir::Positive);
- }
-
- void MainWindow::Z_positive_released()
- {
-     if (currentJogAxis == JogAxis::Z && currentJogDir == JogDir::Positive) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::Z_negative_pressed()
- {
-     requestStartJog(JogAxis::Z, JogDir::Negative);
- }
-
- void MainWindow::Z_negative_released()
- {
-     if (currentJogAxis == JogAxis::Z && currentJogDir == JogDir::Negative) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
-
- void MainWindow::adjustA_positive_pressed()
- {
-     requestStartJog(JogAxis::AdjustA, JogDir::Positive);
- }
-
- void MainWindow::adjustA_positive_released()
- {
-     if (currentJogAxis == JogAxis::AdjustA &&
-         currentJogDir == JogDir::Positive) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::adjustA_negative_pressed()
- {
-     requestStartJog(JogAxis::AdjustA, JogDir::Negative);
- }
-
- void MainWindow::adjustA_negative_released()
- {
-     if (currentJogAxis == JogAxis::AdjustA &&
-         currentJogDir == JogDir::Negative) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::adjustB_positive_pressed()
- {
-     requestStartJog(JogAxis::AdjustB, JogDir::Positive);
- }
-
- void MainWindow::adjustB_positive_released()
- {
-     if (currentJogAxis == JogAxis::AdjustB &&
-         currentJogDir == JogDir::Positive) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
-
- void MainWindow::adjustB_negative_pressed()
- {
-     requestStartJog(JogAxis::AdjustB, JogDir::Negative);
- }
-
- void MainWindow::adjustB_negative_released()
- {
-     if (currentJogAxis == JogAxis::AdjustB &&
-         currentJogDir == JogDir::Negative) {
-         pendingJog.valid = false;
-         doStopJog();
-     }
- }
 
 
 

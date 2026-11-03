@@ -1,7 +1,7 @@
 ﻿# 交接文档 — 点云列表分组功能 & ICP 多片
 
 写给完全没有上下文的新会话。项目是一个 Qt5 (5.15.2 / MSVC2019 x64) + CUDA + PCL 的叶片测量桌面程序，
-主工程 CMake 目标名 `auto_measurement_cmake`。**用户自己在 Qt Creator 里 build，不要在命令行尝试
+主工程 CMake 目标名 `RD_Project`。**用户自己在 Qt Creator 里 build，不要在命令行尝试
 build**（命令行缺少 MSVC 开发环境变量，会报 `type_traits`/`memory` 找不到的假错误，那是环境问题不是代码问题）。
 
 ## 版本控制约定
@@ -15,8 +15,7 @@ build**（命令行缺少 MSVC 开发环境变量，会报 `type_traits`/`memory
 - `beta` 是集成与测试分支；新功能在笔记本完成实机验证前，先合入这里。
 - `feature/<功能名>` 用于较独立或较大的功能开发。例如 `feature/blade-reconstruction`、`feature/jog-control`。
   **分支按代码成熟度划分，不按台式机或笔记本划分。**
-- `origin`（HIT-Visual-Measurement-Research-Group/Auto-Measurement）是唯一主仓库；`blade`
-  （Sunjason123314/blade_measurement）仅作为镜像备份。日常拉取和协作一律使用 `origin`。
+- 新主仓库为 `RD_Project`；收到仓库地址后，将其配置为 `origin` 并用于日常拉取、协作和推送。
 
 推荐流程：台式机从 `beta` 创建 `feature/<功能名>` 开发并推送；笔记本检出同一功能分支进行设备实测；
 通过后合入 `beta`；`beta` 整体验证稳定后再合入 `main`，并创建版本标签（如 `v3.3.8`）。不要直接在 `main` 上开发。

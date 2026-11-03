@@ -15,7 +15,7 @@ if(USECUDA)
     # 如果更换显卡，可根据实际 GPU 架构修改该数值
     set(CMAKE_CUDA_ARCHITECTURES 75)
 
-    project(auto_measurement_cmake VERSION 3.3.7 LANGUAGES C CXX CUDA)
+    project(RD_Project VERSION 3.3.7 LANGUAGES C CXX CUDA)
 
     # 查找并配置 CUDA
     find_package(CUDA REQUIRED)
@@ -25,7 +25,7 @@ if(USECUDA)
 
     message(STATUS "cuda version: " ${CUDA_VERSION_STRING})
 else()
-    project(auto_measurement_cmake VERSION 3.3.7 LANGUAGES C CXX CUDA)
+    project(RD_Project VERSION 3.3.7 LANGUAGES C CXX CUDA)
 endif()
 
 
@@ -50,8 +50,8 @@ endif()
 add_definitions(-D_HAS_STD_BYTE=0)
 
 # 查找 Qt 包
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Core Gui SerialBus SerialPort Network Charts Xml PrintSupport OpenGL Concurrent)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Core Gui SerialBus SerialPort Network Charts Xml PrintSupport OpenGL Concurrent)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets Core Gui SerialPort Network Xml PrintSupport OpenGL Concurrent)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets Core Gui SerialPort Network Xml PrintSupport OpenGL Concurrent)
 
 
 # 主程序源文件
@@ -64,11 +64,8 @@ set(SOURCES
     utils/calibration.cpp
     utils/file_read_write.cpp
     # Pushcontrollerfinal.cpp
-    PLC/plc.cpp
-    PLC/plcconnect.cpp
     CF_sensor/logindialog.cpp
     CF_sensor/qcustomplot.cpp
-    CF_sensor/confocalsettingsdialog.cpp
     ui/morecolordialog.cpp
 )
 
@@ -79,11 +76,8 @@ set(HEADERS
     thread/threadmanager.h
     utils/calibration.h
     utils/file_read_write.h
-    PLC/plc.h
     # Pushcontrollerfinal.h
-    PLC/plcconnect.h
     CF_sensor/logindialog.h
-    CF_sensor/confocalsettingsdialog.h
     CF_sensor/shareResource.h
     CF_sensor/qcustomplot.h
     CF_sensor/CFxxxx_Lib/src_inc/CF_ParameterDefine.h
@@ -96,9 +90,7 @@ set(HEADERS
 # UI 文件
 set(UIS
     app/mainwindow.ui
-    PLC/plcconnect.ui
     CF_sensor/logindialog.ui
-    CF_sensor/confocalsettingsdialog.ui
     ui/morecolordialog.ui
     Select_UI/stltopcd_dialog.ui
     Select_UI/reconst_surface_dialog.ui
@@ -203,7 +195,7 @@ set(SL_QT_SOURCE
 )
 
 # 添加可执行程序，统一汇总所有模块文件
-add_executable(auto_measurement_cmake
+add_executable(RD_Project
     ${SOURCES}
     ${HEADERS}
     ${UIS}
@@ -214,12 +206,6 @@ add_executable(auto_measurement_cmake
     ${QGL_SOURCE}
     ${SL_QT_SOURCE}
     app/include.h
-
-
-    ui/jogpanel.h
-    ui/jogpanel.cpp
-    ui/jogpanel.ui
-
 
 
 )
@@ -244,7 +230,6 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/SL_QT
     ${CMAKE_CURRENT_SOURCE_DIR}/CF_sensor
     ${CMAKE_CURRENT_SOURCE_DIR}/CF_sensor/CFxxxx_Lib/src_inc
-    ${CMAKE_CURRENT_SOURCE_DIR}/PLC
     ${CMAKE_CURRENT_SOURCE_DIR}/thread
     ${CMAKE_CURRENT_SOURCE_DIR}/pointcloud
     ${CMAKE_CURRENT_SOURCE_DIR}/centerlevel
@@ -407,16 +392,16 @@ include_directories("E:/project/610/libQGLViewer-2.8.0/libQGLViewer-2.8.0")
 # CUDA 库配置
 if(USECUDA)
     # CUDA 头文件
-    target_include_directories(auto_measurement_cmake PRIVATE ${CUDA_INCLUDE_DIRS})
+    target_include_directories(RD_Project PRIVATE ${CUDA_INCLUDE_DIRS})
 
     # CUDA 库文件
-    target_link_libraries(auto_measurement_cmake PRIVATE ${CUDA_LIBRARIES})
+    target_link_libraries(RD_Project PRIVATE ${CUDA_LIBRARIES})
 
     # 允许 CUDA 代码中使用扩展 lambda 表达式
-    target_compile_options(auto_measurement_cmake PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
+    target_compile_options(RD_Project PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
 
     # 允许 CUDA 中使用放宽限制的 constexpr
-    target_compile_options(auto_measurement_cmake PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+    target_compile_options(RD_Project PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
 endif()
 
 # CUDA 结构光模块，如需要可开启
@@ -427,14 +412,12 @@ endif()
 
 # 链接 Qt 及第三方库
 # 兼容单配置生成器（Ninja/Make）与多配置生成器（Visual Studio/Qt Creator）。
-target_link_libraries(auto_measurement_cmake PRIVATE
+target_link_libraries(RD_Project PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::Core
     Qt${QT_VERSION_MAJOR}::Gui
-    Qt${QT_VERSION_MAJOR}::SerialBus
     Qt${QT_VERSION_MAJOR}::SerialPort
     Qt${QT_VERSION_MAJOR}::Network
-    Qt${QT_VERSION_MAJOR}::Charts
     Qt${QT_VERSION_MAJOR}::Xml
     Qt${QT_VERSION_MAJOR}::PrintSupport
     Qt${QT_VERSION_MAJOR}::OpenGL
@@ -465,17 +448,17 @@ target_link_libraries(auto_measurement_cmake PRIVATE
 
 # 兼容不同 vcpkg / JsonCpp 导出目标名
 if(TARGET JsonCpp::JsonCpp)
-    target_link_libraries(auto_measurement_cmake PRIVATE JsonCpp::JsonCpp)
+    target_link_libraries(RD_Project PRIVATE JsonCpp::JsonCpp)
 elseif(TARGET jsoncpp_lib)
-    target_link_libraries(auto_measurement_cmake PRIVATE jsoncpp_lib)
+    target_link_libraries(RD_Project PRIVATE jsoncpp_lib)
 elseif(TARGET jsoncpp_static)
-    target_link_libraries(auto_measurement_cmake PRIVATE jsoncpp_static)
+    target_link_libraries(RD_Project PRIVATE jsoncpp_static)
 else()
     message(FATAL_ERROR "jsoncpp target not found after find_package(jsoncpp CONFIG REQUIRED)")
 endif()
 
 # 链接外部 SDK 和 Windows API
-target_link_libraries(auto_measurement_cmake PRIVATE DbgHelp)
+target_link_libraries(RD_Project PRIVATE DbgHelp)
 
 if(WIN32)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
@@ -496,7 +479,7 @@ if(WIN32)
     # 检查 SDK 库文件是否存在
     if(EXISTS ${SDK_LIB_FILE})
         message(STATUS "Found SDK lib: ${SDK_LIB_FILE}")
-        target_link_libraries(auto_measurement_cmake PRIVATE ${SDK_LIB_FILE} DbgHelp)
+        target_link_libraries(RD_Project PRIVATE ${SDK_LIB_FILE} DbgHelp)
     else()
         message(FATAL_ERROR "SDK library not found at: ${SDK_LIB_FILE}")
     endif()
@@ -520,12 +503,12 @@ endif()
 
 
 # 设置 AUTOUIC 搜索路径，让 MOC 能发现 Select_UI/ 下的 .ui 文件
-set_target_properties(auto_measurement_cmake PROPERTIES
+set_target_properties(RD_Project PROPERTIES
     AUTOUIC_SEARCH_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/Select_UI"
 )
 
 # 设置目标属性
-set_target_properties(auto_measurement_cmake PROPERTIES
+set_target_properties(RD_Project PROPERTIES
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE
 )
@@ -534,7 +517,7 @@ set_target_properties(auto_measurement_cmake PROPERTIES
 # 安装配置
 include(GNUInstallDirs)
 
-install(TARGETS auto_measurement_cmake
+install(TARGETS RD_Project
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -543,5 +526,5 @@ install(TARGETS auto_measurement_cmake
 
 # Qt6 特殊处理：最终化可执行程序
 if(QT_VERSION_MAJOR EQUAL 6)
-    qt_finalize_executable(auto_measurement_cmake)
+    qt_finalize_executable(RD_Project)
 endif()

@@ -7,13 +7,13 @@
 
 #include "include.h"
 #include "CF_sensor/confocalsensorworker.h"
-#include "CF_sensor/confocalsettingsdialog.h"
 #include "DLP/dlp.h"
 #include "thread/threadmanager.h"
 #include "pointcloud/pointcloudworker.h"
 #include "pointcloud/Point_Algorithm.h"
 
 #include <QDockWidget>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QPoint>
 #include <QProgressBar>
@@ -28,17 +28,13 @@ class QBoxLayout;
 QT_BEGIN_NAMESPACE
 namespace Ui {
 class MainWindow;
-namespace QtCharts {
-class QPolarChart;
-class QChartView;
-}
 }
 QT_END_NAMESPACE
 
 /**
  * @brief 主窗口类
  *
- * MainWindow 负责协调 UI、标定计算、光谱共焦传感器、PLC/运动控制、相机/DLP、
+ * MainWindow 负责协调 UI、标定计算、光谱共焦传感器、相机/DLP、
  * 点云处理、状态栏以及手动点动面板等主流程。
  *
  * 说明：本次整理仅对声明进行功能分区和注释补充，不改变原有成员声明。
@@ -57,25 +53,6 @@ public:
 
     // DLP 已改为后台 worker，主线程不再直接创建或访问 DLP 硬件对象。
 
-    // PLC 控制器只读访问入口。PLC 已放入子线程，外部模块不要直接跨线程调用其成员函数。
-    Plc* plc() const { return plcController; }
-
-private:
-    // ==================== 极坐标图表显示 ====================
-    // 极坐标图表和视图指针，用于传感器数据的动态刷新显示。
-    QtCharts::QPolarChart *m_polarChart = nullptr;
-    QtCharts::QChartView *m_chartView = nullptr;
-
-    // 初始化绘图容器，并绑定到界面中的 chartWidget。
-    void initChartContainer();
-
-    // 根据传感器值与角度刷新极坐标图。
-    void updatePolarChart(const QVector<double> &cgq2, const QVector<double> &jiaodu2);
-
-public:
-    // ==================== 导轨/PLC 基础运动接口 ====================
-    // 向 PLC 寄存器和线圈写入目标值，并按指定时间等待。
-    void sendRegistersAndVar(const double Target, double address, double address2, double sleep_time);
 
 public:
     // ==================== 光谱共焦传感器：初始化、采集与数据处理 ====================
@@ -100,15 +77,7 @@ public:
     // 状态栏初始化。
     void statusBarInit();
 
-    // 传感器数据读取入口。
-    void mahrSensor();
-    void confSensor();
     void StatuesBar_flash();
-    void mahrSensor77();
-    void mahrSensorpx();
-    void mahrSensor772();
-    void mahrSensor773();
-    void mahrSensor774();
 
     // 测量数据保存。
     void saveJingtaiToFile(QVector<double>& jingtai, const QString& filePath);
@@ -116,9 +85,6 @@ public:
     void someFunction();
 
     // 几何拟合计算。
-    QVector<double> fitCircleCenter(const QVector<double>& l, const QVector<double>& a);
-    QVector<double> fitPlaneNormal(const QVector<double>& l, const QVector<double>& a, double r);
-
     // 传感器和图表数据缓存。
     int jishu;
     QVector<double> jingtai;
@@ -126,42 +92,15 @@ public:
     QVector<double> jiaodu2;
     QVector<double> cgq2;
     QVector<double> jiaodu3;
-    QVector<double> cgqpxht;
-    QVector<double> jiaodupxht;
     QVector<double> cgq3;
 
     // 界面刷新与显示状态。
     int xunhuan; // 界面刷新频率。
-    double banjing;
-    bool isYellow = true;
-    bool isYellow1 = true;
-    QVector<double> dataVector;
-    QVector<double> dataVector2;
-
-    // 路径、绘图和 PLC 初始化流程。
-    void initPaths();
-    void Draw();
-    void initPlcPaths();
+    // 路径和绘图初始化流程。
     void Connect_executeStep();
-
-public slots:
-    // ==================== 对外运动控制槽函数 ====================
-    // 平移、Z 向和调倾/偏心运动控制。
-    void move_motor(double center, double center2, double reg_adress, double xian_adress, double reg_adress2, double xian_adress2);
-    void move_motor_z(double bottom_position_z, double reg_adress_z, double xian_adress_z);
-    void move_motor_t(double tiltX, double tiltY, double eccX, double eccY,
-                      double reg_adress_t_x, double xian_adress_t_x,
-                      double reg_adress_t_y, double xian_adress_t_y,
-                      double reg_adress_c_x, double xian_adress_c_x,
-                      double reg_adress_c_y, double xian_adress_c_y);
-
-    // 定时采集控制。
-    void stop_timer();
-    void start_timer();
 
 private slots:
     // ==================== 文件选择、传感器连接与测量启动 ====================
-    void on_btnChooseFile_clicked();
     void on_actionLink_clicked();
     void on_pushButton_clicked();
     void on_actionStart_clicked();
@@ -174,17 +113,6 @@ private slots:
     void on_pushButtonSingleChannelMOdeDark_clicked();
     void on_pushButtonSingleChannelModeZero_clicked();
     void on_pushButtonSingleChannelModeGetLastResult_clicked();
-
-    // ==================== 标定与导轨移动 ====================
-    void on_calculate_clicked();
-    void on_load_calibration_data_clicked();
-    void on_Daogui_X_clicked();
-    void on_Daogui_Y_clicked();
-    void on_Daogui_Z_clicked();
-    void on_write_ball_A_points_clicked();
-    void on_write_ball_A_done_clicked();
-    void on_write_ball_B_points_clicked();
-    void on_write_ball_B_done_clicked();
 
     // ==================== 相机、DLP 与投影控制 ====================
     void on_pushButton_display_clicked();
@@ -214,19 +142,6 @@ private slots:
     void on_cadImport_clicked();
     void on_reconstructSurface_clicked();
     void on_analysis_clicked();
-    void on_confirm_clicked();
-    void on_record_done_clicked();
-    void on_recover_clicked();
-    void on_rotation_clicked();
-
-    // ==================== 电机使能、旋转与位置运动 ====================
-    void on_btnMotor_Enable_clicked(bool checked);
-    void setLED(QLabel* label, int color, int size);
-    void on_btnRotate_Velocity_clicked();
-    void on_btnRotate_clicked();
-    void on_btnRotateStop_clicked();
-    void on_btnPosition_Velocity_clicked();
-
     // ==================== 状态栏参数读写 ====================
     void getStatusBarResult();
     void setStatusBarValue();
@@ -264,64 +179,6 @@ private slots:
     void on_spinBoxEncodeDivision_valueChanged(int arg1);
     void on_horizontalSliderLightValue_valueChanged(int value);
 
-    // ==================== 测量流程按钮 ====================
-    void initial_velocity();
-    void on_RecordY_clicked();
-    void on_RecordSensor_clicked();
-    void on_lcdNumberSingleChannelResult_overflow();
-    void on_Motionless_clicked();
-    void on_Motion_clicked();
-    void on_SingleCenterMeasure_clicked();
-    void on_ReadDistance_clicked();
-    void on_Readangle_clicked();
-    void on_sensorE_move_clicked();
-    void on_sensorF_move_clicked();
-    void on_sensorA_move_clicked();
-    void on_sensorB_move_clicked();
-    void on_sensorC_move_clicked();
-    void on_sensorD_move_clicked();
-    void on_smallRotate_angle_move_clicked();
-    void on_RecordCenter_clicked();
-    void on_RecordMeasure_clicked();
-    void on_ReadHeight_clicked();
-    void on_ReadAngle_clicked();
-    void on_RecordTilt_clicked();
-
-    // ==================== 急停、辅助导轨和图表窗口 ====================
-    void on_emergency_stop_clicked();
-    void on_Daogui_Y_2_clicked();
-    void on_Daogui_Z_2_clicked();
-
-    // ==================== 手动点动面板与按钮按压释放事件 ====================
-    void on_btnShowJogPanel_clicked();
-
-    void X_positive_pressed();
-    void X_positive_released();
-    void X_negative_pressed();
-    void X_negative_released();
-
-    void Y_positive_pressed();
-    void Y_positive_released();
-    void Y_negative_pressed();
-    void Y_negative_released();
-
-    void Z_positive_pressed();
-    void Z_positive_released();
-    void Z_negative_pressed();
-    void Z_negative_released();
-
-    void adjustA_positive_pressed();
-    void adjustA_positive_released();
-    void adjustA_negative_pressed();
-    void adjustA_negative_released();
-
-    void adjustB_positive_pressed();
-    void adjustB_positive_released();
-    void adjustB_negative_pressed();
-    void adjustB_negative_released();
-
-    // ==================== PLC 连接与界面语言切换 ====================
-    void on_actionPlcCConect_triggered();
     void on_actionCF_Sensor_triggered();
     void on_ChineseEnglishSwitch_clicked();
 
@@ -371,38 +228,8 @@ private slots:
 
 private:
     // ==================== 标定计算参数与流程状态 ====================
-    double G_R1;
-    double G_R2;
-    double G_BALL_DISTANCE;
-    Matrix3d M_opt;
-    VectorXd theta;
-    double alpha;
-    double beta;
-    bool enable_flag;
-    double rotation_theta;
-    double delta_rotation_theta;
-    int i_rote;
-    bool safeguard = true; // 传感器防撞保护。
-
-    // 标定路径与结果路径。
-    QString basePath;       // 标定存储根路径。
-    QString ParameterPath;  // 标定结果路径。
-    QString ball_A_path;    // 标定球 A 数据路径。
-    QString ball_B_path;    // 标定球 B 数据路径。
-    QString rotation_angel;
-
     // 光谱共焦传感器配置状态。
     QString factoryFilePath; // CF3000 出厂配置文件搜索路径。
-
-    // 标定球与 PLC 地址配置。
-    QVector<QVector<Vector3d>> center_all_tri; // 三坐标机下的修正球心坐标。
-    int groupCount;                            // 标准球组数。
-    double address_x1, address_y1, address_z1, address_x2, address_y2, address_z2; // PLC 寄存器地址。
-    double address_y12, address_y22, address_z12, address_z22;
-    double addressqing_reg_1, addressqing_reg_2, addressqing_reg_3, addressqing_reg_4; // 调倾寄存器地址。
-    double addressqing_cyl_1, addressqing_cyl_2, addressqing_cyl_3, addressqing_cyl_4; // 调倾线圈地址。
-    double addressxin_reg_1, addressxin_reg_2; // 偏心寄存器地址。
-    double addressxin_cyl_1, addressxin_cyl_2; // 偏心线圈地址。
 
     // 图像文件读取工具。
     bool read_imgs(string path, vector<cv::Mat>& imgs);
@@ -423,56 +250,7 @@ private:
     QString sensorSNResult;
     int curFrameRate = 0;
 
-    // 目标位置与运动状态。
-    double target;
-    const double tolerance_z_target = 0.5;
-    bool zMoveActive = false; // 当前是否仍允许 Z 正向运动。
-    bool xMoveActive = false;
-    bool yMoveActive = false;
-
-    // ==================== 手动点动状态机 ====================
-    enum class JogAxis {
-        None,
-        X,
-        Y,
-        Z,
-        AdjustA,
-        AdjustB
-    };
-
-    enum class JogDir {
-        Positive,
-        Negative
-    };
-
-    struct PendingJogCommand {
-        bool valid = false;
-        JogAxis axis = JogAxis::None;
-        JogDir dir = JogDir::Positive;
-    };
-
-    bool jogActive = false;   // 当前是否在运动。
-    bool jogBusy = false;     // 是否正在执行启动/停止过程。
-    bool jogStopping = false; // 是否处于停止阶段。
-
-    JogAxis currentJogAxis = JogAxis::None;
-    JogDir currentJogDir = JogDir::Positive;
-
-    PendingJogCommand pendingJog;
-
-    int jogCommandId = 0;   // 用于取消旧命令。
-    int speedRestoreId = 0; // 用于取消旧速度恢复。
-
 private:
-    // ==================== 手动点动时序常量 ====================
-    static constexpr int STOP_SETTLE_MS = 180;         // 停止稳定时间。
-    static constexpr int START_DELAY_MS = 120;         // 启动延迟。
-    static constexpr int ESTOP_PULSE_MS = 80;          // 急停脉冲宽度。
-    static constexpr int RESTORE_SPEED_DELAY_MS = 800; // 恢复正常速度延迟。
-
-private:
-    // ==================== 手动点动内部控制函数与键盘状态 ====================
-    void setJogButtonDown(JogAxis axis, JogDir dir, bool down);
     void initial_UI();
     // 将主 Tab 与信息输出框放入可拖动的上下 QSplitter，分隔条可调整二者高度。
     void setupCentralSplitter();
@@ -487,25 +265,6 @@ private:
     QWidget *ensurePointCloudLogPanel();
     void setupPointCloudListToolbar(QBoxLayout *sidebarLayout);
     void regroupPointCloudActionButtons(QWidget *optionsPage);
-    void requestStartJog(JogAxis axis, JogDir dir);
-    void doStartJog(JogAxis axis, JogDir dir);
-    void doStopJog();
-    void finishStopAndStartPending();
-    void emergencyStopJog();
-    void clearAllJogKeyStates();
-
-    bool aKeyPressed = false;
-    bool dKeyPressed = false;
-    bool leftKeyPressed = false;
-    bool rightKeyPressed = false;
-    bool upKeyPressed = false;
-    bool downKeyPressed = false;
-
-signals:
-    // ==================== 跨模块通知信号 ====================
-    void emit_move_motor(double center, double center2, double reg_adress, double xian_adress, double reg_adress2, double xian_adress2);
-    void motorTiltFinished(); // 电机调倾动作完成信号。
-
 private:
     // ==================== 核心对象、UI 与控制器 ====================
     Ui::MainWindow* ui;
@@ -518,7 +277,7 @@ private:
     Calibration* calibration;
     File_Read_Write* fileReaderWriter;
     ShareResource* g_Global;
-    // 统一线程管理器：PLC 和光谱共焦传感器都通过它 moveToThread、停止和释放。
+    // 统一线程管理器负责各后台模块的停止和释放。
     ThreadManager* threadManager = nullptr;
 
     // 光谱共焦传感器后台 worker；GUI 线程只保存指针用于 invokeMethod 投递 SDK 操作。
@@ -526,22 +285,12 @@ private:
 
     // 光谱共焦传感器设置对话框（持久成员，非 WA_DeleteOnClose）。
     // CF 设置分页在首次打开时从 tabWidget_tri 移入其内部 QTabWidget，之后常驻。
-    ConfocalSettingsDialog* confocalSettingsDialog = nullptr;
  
-    // PLC 控制对象已交给 ThreadManager 移入 PLC 子线程；主线程只保存指针用于投递 queued 调用。
-    Plc *plcController = nullptr;
-
     // DLP 投影仪对象；直接在主线程创建并同步调用（对齐 qt_camera，避免与相机 USB 操作跨线程冲突导致 I2C NAK）。
     DLP *dlp1 = nullptr;
 
     // 点云文件加载后台 worker；OpenGL 显示控件留在 GUI 线程，文件读取和数据准备放入 PointCloudDisplayThread。
     PointCloudWorker *pointCloudWorker = nullptr;
-
-    // GUI 线程使用的 PLC 数据缓存。由 Plc::dataUpdated 跨线程发送快照后更新，界面刷新只读这里。
-    PlcDataSnapshot plcSnapshot;
-
-    // GUI 线程中的 PLC 连接状态缓存，避免直接跨线程调用 Plc::isPlcConnected()。
-    bool plcConnectedFlag = false;
 
     // GUI 线程中的 DLP 初始化状态缓存，避免按钮槽函数直接访问 DLP 子线程对象成员。
     bool dlpInitialized = false;
@@ -640,18 +389,14 @@ private:
 private:
     // ==================== 定时器与辅助面板 ====================
     // Qt 界面刷新与传感器采集定时器。
-    QTimer* mahrTimer = nullptr;
-    QTimer* mahrTimer77 = nullptr;
     QTimer* confTimer = nullptr;
     QTimer* StatusBarTimer = nullptr;
-    JogPanel *jogPanel = nullptr;
-    double m_rotateVelocity = 5.5;
-    double m_positionVelocity = 15.0;
-    double m_jogVelocity = 3.0;
+    QElapsedTimer confocalDisplayRefreshTimer;
+    bool autoStartSamplingAfterDark = false;
+    int autoConnectCF4000Attempts = 0;
+    void startAutoConnectCF4000Attempt();
 
     // ==================== 点云重建与窗口连接 ====================
-    bool isArmInPosition();
-    void intial_window_connect();
 
     // ==================== 模块线程管理 ====================
     void initThreadManager();
@@ -664,27 +409,6 @@ private:
     void restoreMainTab(QWidget *page);
     int tabInsertIndexForOriginalIndex(int originalIndex) const;
  
-    // ==================== PLC 线程管理 ====================
-    // 初始化 PLC worker，并通过 ThreadManager 移入独立线程运行。
-    void initPlcThread();
-
-    // 停止 PLC 线程；关闭窗口或统一停止模块线程时调用。
-    void shutdownPlcThread();
-
-    // 接收 PLC 子线程发来的数据快照，并更新 GUI 线程缓存 plcSnapshot。
-    void updatePlcSnapshot(const PlcDataSnapshot& snapshot);
-
-    // 以下 postPlcXXX 是跨线程投递入口：只负责把 PLC 操作排队到 PLC 子线程执行。
-    // 新增或修改界面逻辑时不要直接调用 plcController->xxx()，应通过这些封装函数。
-    void postPlcConnect();
-    void postPlcDisconnect();
-    void postPlcStartCollectingData();
-    void postPlcStartContinuousMovement(double cylinder, double address);
-    void postPlcMoveToAbsolutePosition(double cylinder, double address);
-    void postPlcWriteHoldingRegisters(double registers, double address);
-    void postPlcWriteCoilData(double value, double address);
-
-
     // ==================== 点云线程管理 ====================
     // 初始化点云 worker，并通过 ThreadManager 移入独立线程执行文件读取和数据准备。
     void initPointCloudThread();
@@ -718,7 +442,6 @@ private:
     void applyConfocalInitialConfig(const ConfocalInitialConfig& config);
 
     // 构造光谱共焦设置对话框并把 5 个 CF 分页从 tabWidget_tri 移入（启动时调用）。
-    void initConfocalSettingsDialog();
 
     // 接收子线程读取到的 SDK/控制器/传感器状态快照，并刷新状态栏缓存。
     void updateConfocalStatusSnapshot(const ConfocalStatusSnapshot& snapshot);
@@ -739,7 +462,6 @@ protected:
 
     void initRuntimeBuffers();
     void initTimers();
-    void initPlcRuntimeConnection();
 };
 
 #endif // MAINWINDOW_H

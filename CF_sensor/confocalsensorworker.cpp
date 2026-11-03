@@ -66,6 +66,58 @@ void ConfocalSensorWorker::setDeviceHandle(int handle, bool isCF3000Lite)
     m_isCF3000Lite = isCF3000Lite;
 }
 
+void ConfocalSensorWorker::autoConnectCF4000()
+{
+    if(m_hasHandle)
+    {
+        m_autoConnectionAttempt = true;
+        verifyConnection();
+        return;
+    }
+
+    DeviceInfo_t *deviceInfo = nullptr;
+    int deviceCount = 0;
+    const StatusTypeDef scanResult = CF_ScanDeviceList(&deviceInfo, &deviceCount);
+    if(scanResult != Status_Succeed || deviceCount <= 0)
+    {
+        emit logMessage(QStringLiteral("No CF4000 device found for automatic connection."));
+        emit autoConnectionAttemptFinished(false);
+        return;
+    }
+
+    DeviceInfo_t *cf4000Info = nullptr;
+    for(int i = 0; i < deviceCount; ++i)
+    {
+        if(deviceInfo[i].descriptor[2] == '4')
+        {
+            cf4000Info = &deviceInfo[i];
+            break;
+        }
+    }
+
+    if(!cf4000Info)
+    {
+        emit logMessage(QStringLiteral("No CF4000 device found for automatic connection."));
+        emit autoConnectionAttemptFinished(false);
+        return;
+    }
+
+    const StatusTypeDef openResult = CF_OpenDevice(cf4000Info, &m_handle, HPS_CF4000);
+    if(openResult != Status_Succeed)
+    {
+        m_handle = 0;
+        emit operationFailed(QStringLiteral("autoConnectCF4000"), static_cast<int>(openResult));
+        emit autoConnectionAttemptFinished(false);
+        return;
+    }
+
+    m_hasHandle = true;
+    m_isCF3000Lite = false;
+    emit autoConnectionOpened(static_cast<int>(m_handle));
+    m_autoConnectionAttempt = true;
+    verifyConnection();
+}
+
 bool ConfocalSensorWorker::hasHandle() const
 {
     return m_hasHandle;
@@ -74,9 +126,14 @@ bool ConfocalSensorWorker::hasHandle() const
 void ConfocalSensorWorker::verifyConnection()
 {
     // 没有句柄说明还未登录或设备打开失败。
+    const bool autoAttempt = m_autoConnectionAttempt;
+    m_autoConnectionAttempt = false;
+
     if(!hasHandle())
     {
         emit connectionChecked(false, 0);
+        if(autoAttempt)
+            emit autoConnectionAttemptFinished(false);
         return;
     }
 
@@ -95,6 +152,18 @@ void ConfocalSensorWorker::verifyConnection()
     }
 
     emit connectionChecked(connected, connectStatus);
+
+    if(autoAttempt)
+    {
+        if(!connected)
+        {
+            CF_CloseDevice(m_handle);
+            m_hasHandle = false;
+            m_handle = 0;
+            m_isCF3000Lite = false;
+        }
+        emit autoConnectionAttemptFinished(connected);
+    }
 }
 
 void ConfocalSensorWorker::requestInitialConfig(int singleChannelIndex, int lightChannelIndex, int filterAndSignalChannelIndex)
@@ -310,7 +379,10 @@ void ConfocalSensorWorker::setFloatParam(const QString &paramName, int channelIn
 void ConfocalSensorWorker::darkSignal(int channelIndex)
 {
     if(!hasHandle())
+    {
+        emit darkSignalFinished(false, channelIndex);
         return;
+    }
 
     // 暗信号校正用于扣除环境/背景信号。
     StatusTypeDef ret = CF_DarkSignal(m_handle, channelIndex, true);
@@ -318,6 +390,8 @@ void ConfocalSensorWorker::darkSignal(int channelIndex)
         emit logMessage(tr("Single channel Dark successfully!"));
     else
         emit operationFailed(QStringLiteral("Dark"), static_cast<int>(ret));
+
+    emit darkSignalFinished(ret == Status_Succeed, channelIndex);
 }
 
 void ConfocalSensorWorker::zero(int channelIndex)

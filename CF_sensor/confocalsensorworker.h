@@ -110,6 +110,7 @@ public slots:
     // 以下槽函数是光谱共焦 worker 的线程入口。
     // MainWindow 通过 QMetaObject::invokeMethod/信号槽排队调用，避免 UI 线程直接访问 SDK。
     void setDeviceHandle(int handle, bool isCF3000Lite); ///< 保存登录窗口返回的设备句柄与设备型号。
+    void autoConnectCF4000();                            ///< 扫描并连接第一台可用的 CF4000。
     void verifyConnection();                             ///< 检查设备连接状态，并在成功后注册 SDK 回调。
     void requestInitialConfig(int singleChannelIndex, int lightChannelIndex, int filterAndSignalChannelIndex); ///< 读取初始化配置。
     void requestStatusSnapshot();                        ///< 读取 SDK、控制器、传感器状态快照。
@@ -126,9 +127,12 @@ public slots:
 signals:
     // worker 不直接操作界面，所有状态、日志、测量值都通过信号返回 GUI 线程处理。
     void connectionChecked(bool connected, int connectStatus); ///< 连接检查完成。
+    void autoConnectionOpened(int handle); ///< 自动打开 CF4000 后返回设备句柄。
+    void autoConnectionAttemptFinished(bool connected); ///< 一次自动连接尝试完成。
     void initialConfigReady(const ConfocalInitialConfig &config); ///< 初始化参数读取完成。
     void statusSnapshotReady(const ConfocalStatusSnapshot &snapshot); ///< 状态快照读取完成。
     void sampleStateChanged(bool started, int status); ///< 采样启停状态变化。
+    void darkSignalFinished(bool succeeded, int channelIndex); ///< 暗信号校正完成。
     void deviceClosed(); ///< 设备已关闭。
     void logMessage(const QString &message); ///< 需要显示到 UI 的普通日志。
     void operationFailed(const QString &operation, int status); ///< SDK 操作失败。
@@ -145,6 +149,7 @@ private:
     DeviceHandle_t m_handle = 0;               ///< SDK 设备句柄。
     bool m_hasHandle = false;                  ///< 是否已保存有效句柄。
     bool m_isCF3000Lite = false;               ///< 当前设备是否为 CF3000Lite。
+    bool m_autoConnectionAttempt = false;      ///< 当前连接校验是否属于自动连接。
     int m_lastSingleChannelIndex = 0;          ///< 最近一次启停采样使用的通道索引。
     std::atomic_bool m_started{false};         ///< 采样状态标志，回调线程和 worker 线程都会读取。
 };

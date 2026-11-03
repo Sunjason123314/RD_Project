@@ -140,8 +140,6 @@ QString ThreadManager::moduleName(Module module) const
     {
     case Module::ConfocalSensor:
         return QStringLiteral("ConfocalSensorThread");
-    case Module::Plc:
-        return QStringLiteral("PlcThread");
     case Module::Dlp:
         return QStringLiteral("DlpThread");
     case Module::Camera:

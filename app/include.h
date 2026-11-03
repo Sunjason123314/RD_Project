@@ -25,14 +25,6 @@
 #include <QFuture>
 #include <QFutureWatcher>
 
-// Qt Charts
-#include <QtCharts/QChartView>
-#include <QtCharts/QLineSeries>
-#include <QtCharts/QSplineSeries>
-#include <QtCharts/QScatterSeries>
-#include <QtCharts/QValueAxis>
-#include <QtCharts>
-
 // ============================
 // Standard C++ Library
 // ============================
@@ -90,7 +82,6 @@
 // ============================
 #include "calibration.h"
 #include "file_read_write.h"
-#include "PLC/plc.h"
 #include "./CF_sensor/logindialog.h"
 #include "CF_UserInterface.h"
 #include "CF_ParameterDefine.h"
@@ -99,8 +90,6 @@
 // #include "pointcloud/dicqglviewer.h"  // 已通过 mainwindow.h 间接包含，避免 using namespace std 污染全局作用域导致 C2533 错误
 // #include "HardwareDataProvider.h"
 
-#include "PLC/plcconnect.h"
-#include "jogpanel.h"
 #include <QKeyEvent>
 #include <QEvent>
 #include <QLineEdit>

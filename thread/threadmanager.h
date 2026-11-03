@@ -30,7 +30,6 @@ public:
     enum class Module
     {
         ConfocalSensor = 0, ///< 光谱共焦传感器线程。
-        Plc,               ///< PLC 通信线程。
         Dlp,               ///< DLP 投影仪线程。
         Camera,            ///< 工业相机线程，可按实例编号管理多个相机窗口。
         CameraProjector,   ///< 相机/DLP 投影相关预留线程。

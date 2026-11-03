@@ -47,6 +47,7 @@ CMakeLists.txt.user.*
 
 # ===== 压缩包 / 大文件 =====
 data/
+CF4000JL*.bt
 *.zip
 *.7z
 *.rar
